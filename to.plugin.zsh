@@ -22,6 +22,7 @@ typeset -gi TO_FOLLOW_SYMLINKS
 (( TO_SEARCH_PATH_FRAGMENTS == 0 || TO_SEARCH_PATH_FRAGMENTS == 1 )) || TO_SEARCH_PATH_FRAGMENTS=0
 (( TO_FOLLOW_SYMLINKS == 0 || TO_FOLLOW_SYMLINKS == 1 )) || TO_FOLLOW_SYMLINKS=0
 
+TO_ROOTS=()
 TO_EXCLUDES=(
   "${TO_EXCLUDES[@]}"
   .git
@@ -301,33 +302,60 @@ _to_search_exact_name() {
 
 _to_index_collect_tsv() {
   local output_file="$1"
-  local -a roots candidates
-  local -a seen
-  local root dir key is_git
+  local -a roots
+  local root dir name is_git tmpfile
 
   _to_load_roots
   roots=("${TO_ROOTS[@]}")
   mkdir -p "$TO_CONFIG_HOME" || return 1
-  : > "$output_file" || return 1
+  tmpfile="$output_file.tmp.$$"
+  : > "$tmpfile" || return 1
 
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
     print -u2 -- "to: indexing $root"
     if command -v fd >/dev/null 2>&1; then
-      candidates=("${(@f)$(_to_search_dirs_with_fd "$root")}")
+      local -a exclude_args follow_args
+      exclude_args=("${(@f)$(_to_exclude_args_fd)}")
+      (( TO_FOLLOW_SYMLINKS == 1 )) && follow_args=(--follow)
+      while IFS= read -r dir; do
+        dir="${dir%/}"
+        [[ -n "$dir" ]] || continue
+        name="${dir:t}"
+        is_git=0
+        [[ -d "$dir/.git" ]] && is_git=1
+        printf '%s\t%s\t%s\t%s\n' "$dir" "$name" "${(L)name}" "$is_git" >> "$tmpfile"
+      done < <(
+        fd --type d --hidden "${follow_args[@]}" --max-depth "$TO_MAX_DEPTH" \
+          "${exclude_args[@]}" . "$root" 2>/dev/null
+      )
     else
-      candidates=("${(@f)$(_to_search_dirs_with_find "$root")}")
+      local -a prune_expr
+      prune_expr=("${(@f)$(_to_prune_expr_find)}")
+      if (( ${#prune_expr} > 0 )); then
+        while IFS= read -r dir; do
+          name="${dir:t}"
+          is_git=0
+          [[ -d "$dir/.git" ]] && is_git=1
+          printf '%s\t%s\t%s\t%s\n' "$dir" "$name" "${(L)name}" "$is_git" >> "$tmpfile"
+        done < <(
+          find "$root" -maxdepth "$TO_MAX_DEPTH" \( "${prune_expr[@]}" \) -prune -o -type d -print 2>/dev/null
+        )
+      else
+        while IFS= read -r dir; do
+          name="${dir:t}"
+          is_git=0
+          [[ -d "$dir/.git" ]] && is_git=1
+          printf '%s\t%s\t%s\t%s\n' "$dir" "$name" "${(L)name}" "$is_git" >> "$tmpfile"
+        done < <(
+          find "$root" -maxdepth "$TO_MAX_DEPTH" -type d -print 2>/dev/null
+        )
+      fi
     fi
-    for dir in "${candidates[@]}"; do
-      [[ -d "$dir" ]] || continue
-      key="${dir:A}"
-      (( ${seen[(Ie)$key]} > 0 )) && continue
-      seen+=("$key")
-      is_git=0
-      [[ -d "$key/.git" ]] && is_git=1
-      printf '%s\t%s\t%s\t%s\n' "$key" "${key:t}" "${(L)key:t}" "$is_git" >> "$output_file"
-    done
   done
+
+  sort -u "$tmpfile" > "$output_file" 2>/dev/null || mv "$tmpfile" "$output_file"
+  rm -f "$tmpfile"
 }
 
 _to_index_rebuild_sqlite() {
@@ -335,9 +363,21 @@ _to_index_rebuild_sqlite() {
 
   mkdir -p "$TO_CONFIG_HOME" || return 1
   _to_index_collect_tsv "$tmp" || return 1
-  sqlite3 "$TO_INDEX_FILE" "drop table if exists dirs; create table dirs(path text primary key, name text not null, lower_name text not null, is_git integer not null);" || return 1
-  sqlite3 "$TO_INDEX_FILE" ".mode tabs" ".import $tmp dirs" || return 1
-  sqlite3 "$TO_INDEX_FILE" "create index idx_dirs_lower_name on dirs(lower_name); create index idx_dirs_is_git on dirs(is_git); create index idx_dirs_path on dirs(path);" || return 1
+  sqlite3 "$TO_INDEX_FILE" <<SQL || return 1
+pragma journal_mode=off;
+pragma synchronous=0;
+pragma cache_size=20000;
+drop table if exists dirs;
+create table dirs(path text primary key, name text not null, lower_name text not null, is_git integer not null);
+begin transaction;
+.mode tabs
+.import ${tmp} dirs
+commit;
+create index idx_dirs_lower_name on dirs(lower_name);
+create index idx_dirs_is_git on dirs(is_git);
+create index idx_dirs_path on dirs(path);
+pragma journal_mode=delete;
+SQL
   rm -f "$tmp"
 }
 
@@ -563,7 +603,7 @@ _to_rank_matches() {
 }
 
 _to_collect_matches_for_mode() {
-  local -a search_roots queries candidates unique ranked
+  local -a search_roots queries unique ranked
   local root dir key roots_ref mode
   local -a seen
 
@@ -576,22 +616,52 @@ _to_collect_matches_for_mode() {
   for root in "${search_roots[@]}"; do
     [[ -d "$root" ]] || continue
     if [[ "$mode" == exact && ${#queries} == 1 && "$queries[1]" != */* ]]; then
-      candidates=("${(@f)$(_to_search_exact_name "$root" "$queries[1]")}")
+      local -a exact_matches
+      exact_matches=("${(@f)$(_to_search_exact_name "$root" "$queries[1]")}")
+      for dir in "${exact_matches[@]}"; do
+        [[ -d "$dir" ]] || continue
+        _to_match_mode_allows "$mode" "$dir" "${queries[@]}" || continue
+        key="${dir:A}"
+        if (( ${seen[(Ie)$key]} == 0 )); then
+          seen+=("$key")
+          unique+=("$key")
+        fi
+      done
     elif command -v fd >/dev/null 2>&1; then
-      candidates=("${(@f)$(_to_search_dirs_with_fd "$root")}")
+      local -a exclude_args follow_args
+      exclude_args=("${(@f)$(_to_exclude_args_fd)}")
+      (( TO_FOLLOW_SYMLINKS == 1 )) && follow_args=(--follow)
+      while IFS= read -r dir; do
+        dir="${dir%/}"
+        [[ -n "$dir" ]] || continue
+        _to_match_mode_allows "$mode" "$dir" "${queries[@]}" || continue
+        key="$dir"
+        if (( ${seen[(Ie)$key]} == 0 )); then
+          seen+=("$key")
+          unique+=("$key")
+        fi
+      done < <(
+        fd --type d --hidden "${follow_args[@]}" --max-depth "$TO_MAX_DEPTH" \
+          "${exclude_args[@]}" . "$root" 2>/dev/null
+      )
     else
-      candidates=("${(@f)$(_to_search_dirs_with_find "$root")}")
-    fi
-
-    for dir in "${candidates[@]}"; do
-      [[ -d "$dir" ]] || continue
-      _to_match_mode_allows "$mode" "$dir" "${queries[@]}" || continue
-      key="${dir:A}"
-      if (( ${seen[(Ie)$key]} == 0 )); then
-        seen+=("$key")
-        unique+=("$key")
+      local -a prune_expr find_matches
+      prune_expr=("${(@f)$(_to_prune_expr_find)}")
+      if (( ${#prune_expr} > 0 )); then
+        find_matches=("${(@f)$(find "$root" -maxdepth "$TO_MAX_DEPTH" \( "${prune_expr[@]}" \) -prune -o -type d -print 2>/dev/null)}")
+      else
+        find_matches=("${(@f)$(find "$root" -maxdepth "$TO_MAX_DEPTH" -type d -print 2>/dev/null)}")
       fi
-    done
+      for dir in "${find_matches[@]}"; do
+        [[ -d "$dir" ]] || continue
+        _to_match_mode_allows "$mode" "$dir" "${queries[@]}" || continue
+        key="$dir"
+        if (( ${seen[(Ie)$key]} == 0 )); then
+          seen+=("$key")
+          unique+=("$key")
+        fi
+      done
+    fi
   done
 
   unique=("${(@f)$(_to_prune_descendant_matches "${unique[@]}")}")

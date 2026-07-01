@@ -50,12 +50,32 @@ export HOME="$HOME_DIR"
 export TO_CONFIG_HOME="$CONFIG"
 export TO_MAX_DEPTH=8
 
+TO_ROOTS=("$HOME_DIR")
 source "${0:A:h}/../to.plugin.zsh"
+assert_eq "$(to roots)" "${HOME_DIR:A}/Projects
+${HOME_DIR:A}/Downloads" "source ignores stale in-shell roots"
 
 to use "$SEARCH_ROOT" >/dev/null
-to --reindex >/dev/null
+
+# Regression: sqlite reindex must run in a single active transaction; a split
+# begin/import/commit across processes emits "cannot commit - no transaction".
+reindex_errors="$(to --reindex 2>&1 >/dev/null)"
+[[ "$reindex_errors" != *"cannot commit"* && "$reindex_errors" != *"Error:"* ]] \
+  || fail "reindex emitted sqlite error: $reindex_errors"
+ok "reindex runs without sqlite errors"
+
 [[ -r "$TO_INDEX_FILE" || -r "$TO_INDEX_TSV_FILE" ]] || fail "index file was not created"
 ok "reindex creates cache"
+
+# Regression: fd emits absolute paths, so indexed paths must not be re-prefixed
+# with the root (which produced doubled, non-existent paths).
+indexed_assignment="$(_to_index_query exact assignment)"
+assert_path_eq "$indexed_assignment" "$SEARCH_ROOT/Assignment" "index stores un-doubled paths"
+while IFS= read -r indexed_path; do
+  [[ -z "$indexed_path" || -d "$indexed_path" ]] \
+    || fail "index contains a non-existent (doubled?) path: $indexed_path"
+done < <(_to_index_query path "$SEARCH_ROOT")
+ok "all indexed paths exist"
 
 to -r "$SEARCH_ROOT" assignment
 assert_path_eq "$PWD" "$SEARCH_ROOT/Assignment" "exact directory name wins over children"
