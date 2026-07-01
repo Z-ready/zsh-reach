@@ -363,7 +363,7 @@ _to_index_rebuild_sqlite() {
 
   mkdir -p "$TO_CONFIG_HOME" || return 1
   _to_index_collect_tsv "$tmp" || return 1
-  sqlite3 "$TO_INDEX_FILE" <<SQL || return 1
+  sqlite3 "$TO_INDEX_FILE" >/dev/null <<SQL || return 1
 pragma journal_mode=off;
 pragma synchronous=0;
 pragma cache_size=20000;
