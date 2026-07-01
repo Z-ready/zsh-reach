@@ -186,6 +186,7 @@ TO_EXCLUDES=(
 TO_MAX_DEPTH=8
 TO_INTERACTIVE_THRESHOLD=3
 TO_SEARCH_PATH_FRAGMENTS=0
+TO_FOLLOW_SYMLINKS=0
 TO_AI_COMMAND=""
 TO_HELPER=""
 ```
@@ -193,6 +194,9 @@ TO_HELPER=""
 `TO_SEARCH_PATH_FRAGMENTS=0` is the default. In that mode, `to assignment`
 means “jump to a folder named Assignment.” Set it to `1` if you also want
 `to sign` to match paths like `~/Downloads/Assignment`.
+
+`TO_FOLLOW_SYMLINKS=0` is the default. Keep it off unless you intentionally
+want `to` to search through symlinked directory trees.
 
 Persistent roots managed by `to use` and `to unuse` are stored in:
 
@@ -245,7 +249,10 @@ Broader modes cost more:
 - `to -i name` collects all exact matches so you can choose one.
 
 Cost is proportional to the number of directories under your configured roots,
-up to `TO_MAX_DEPTH`. Prefer focused roots:
+up to `TO_MAX_DEPTH`. By default, `to` uses common focused roots such as
+`~/Projects`, `~/Code`, `~/Documents`, `~/Downloads`, and `~/Desktop` when they
+exist. It does not default to scanning your whole home directory. Prefer adding
+focused roots:
 
 ```zsh
 to use ~/Projects
@@ -264,6 +271,7 @@ For lower energy use on large machines, keep:
 ```zsh
 TO_MAX_DEPTH=5
 TO_SEARCH_PATH_FRAGMENTS=0
+TO_FOLLOW_SYMLINKS=0
 ```
 
 For faster repeated searches, build the cache:

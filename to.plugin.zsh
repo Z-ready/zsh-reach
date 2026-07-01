@@ -5,6 +5,7 @@ typeset -ga TO_EXCLUDES
 typeset -gi TO_MAX_DEPTH
 typeset -gi TO_INTERACTIVE_THRESHOLD
 typeset -gi TO_SEARCH_PATH_FRAGMENTS
+typeset -gi TO_FOLLOW_SYMLINKS
 
 : ${TO_CONFIG_HOME:="${XDG_CONFIG_HOME:-$HOME/.config}/to"}
 : ${TO_CONFIG_FILE:="$TO_CONFIG_HOME/config.zsh"}
@@ -19,6 +20,7 @@ typeset -gi TO_SEARCH_PATH_FRAGMENTS
 (( TO_MAX_DEPTH > 0 )) || TO_MAX_DEPTH=8
 (( TO_INTERACTIVE_THRESHOLD > 0 )) || TO_INTERACTIVE_THRESHOLD=3
 (( TO_SEARCH_PATH_FRAGMENTS == 0 || TO_SEARCH_PATH_FRAGMENTS == 1 )) || TO_SEARCH_PATH_FRAGMENTS=0
+(( TO_FOLLOW_SYMLINKS == 0 || TO_FOLLOW_SYMLINKS == 1 )) || TO_FOLLOW_SYMLINKS=0
 
 TO_EXCLUDES=(
   "${TO_EXCLUDES[@]}"
@@ -68,7 +70,7 @@ _to_load_roots() {
     done < "$TO_ROOTS_FILE"
   fi
 
-  default_roots=("$HOME" "$HOME/Projects" "$HOME/Code" "$HOME/Documents")
+  default_roots=("$HOME/Projects" "$HOME/Code" "$HOME/Documents" "$HOME/Downloads" "$HOME/Desktop")
   TO_ROOTS=("${(@f)$(_to_unique_existing_dirs "${TO_ROOTS[@]}" "${file_roots[@]}" "${default_roots[@]}")}")
 }
 
@@ -235,10 +237,11 @@ _to_prune_expr_find() {
 _to_search_dirs_with_fd() {
   local root="$1"
   shift
-  local -a exclude_args
+  local -a exclude_args follow_args
 
   exclude_args=("${(@f)$(_to_exclude_args_fd)}")
-  fd --type d --hidden --follow --max-depth "$TO_MAX_DEPTH" "${exclude_args[@]}" . "$root" 2>/dev/null
+  (( TO_FOLLOW_SYMLINKS == 1 )) && follow_args=(--follow)
+  fd --type d --hidden "${follow_args[@]}" --max-depth "$TO_MAX_DEPTH" "${exclude_args[@]}" . "$root" 2>/dev/null
 }
 
 _to_search_dirs_with_find() {
@@ -257,14 +260,15 @@ _to_search_exact_name_with_fd() {
   local root="$1"
   local query="$2"
   local limit="${3:-}"
-  local -a exclude_args limit_args
+  local -a exclude_args limit_args follow_args
 
   exclude_args=("${(@f)$(_to_exclude_args_fd)}")
   if [[ -n "$limit" ]]; then
     limit_args=(--max-results "$limit")
   fi
+  (( TO_FOLLOW_SYMLINKS == 1 )) && follow_args=(--follow)
 
-  fd --type d --hidden --follow --max-depth "$TO_MAX_DEPTH" --glob --ignore-case "${limit_args[@]}" "${exclude_args[@]}" "$query" "$root" 2>/dev/null
+  fd --type d --hidden "${follow_args[@]}" --max-depth "$TO_MAX_DEPTH" --glob --ignore-case "${limit_args[@]}" "${exclude_args[@]}" "$query" "$root" 2>/dev/null
 }
 
 _to_search_exact_name_with_find() {
@@ -295,48 +299,20 @@ _to_search_exact_name() {
   fi
 }
 
-_to_index_insert_sqlite() {
-  local dir="${1:A}"
-  local name="${dir:t}"
-  local is_git=0
-
-  [[ -d "$dir/.git" ]] && is_git=1
-  sqlite3 "$TO_INDEX_FILE" "insert into dirs(path,name,lower_name,is_git) values ($(_to_sql_quote "$dir"), $(_to_sql_quote "$name"), $(_to_sql_quote "${(L)name}"), $is_git);" >/dev/null 2>&1
-}
-
-_to_index_rebuild_sqlite() {
+_to_index_collect_tsv() {
+  local output_file="$1"
   local -a roots candidates
-  local root dir
-
-  _to_load_roots
-  roots=("${TO_ROOTS[@]}")
-  mkdir -p "$TO_CONFIG_HOME" || return 1
-  sqlite3 "$TO_INDEX_FILE" "drop table if exists dirs; create table dirs(path text primary key, name text not null, lower_name text not null, is_git integer not null); create index idx_dirs_lower_name on dirs(lower_name); create index idx_dirs_is_git on dirs(is_git);" || return 1
-
-  for root in "${roots[@]}"; do
-    [[ -d "$root" ]] || continue
-    if command -v fd >/dev/null 2>&1; then
-      candidates=("${(@f)$(_to_search_dirs_with_fd "$root")}")
-    else
-      candidates=("${(@f)$(_to_search_dirs_with_find "$root")}")
-    fi
-    for dir in "${candidates[@]}"; do
-      [[ -d "$dir" ]] && _to_index_insert_sqlite "$dir"
-    done
-  done
-}
-
-_to_index_rebuild_tsv() {
-  local -a roots candidates seen
+  local -a seen
   local root dir key is_git
 
   _to_load_roots
   roots=("${TO_ROOTS[@]}")
   mkdir -p "$TO_CONFIG_HOME" || return 1
-  : > "$TO_INDEX_TSV_FILE" || return 1
+  : > "$output_file" || return 1
 
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
+    print -u2 -- "to: indexing $root"
     if command -v fd >/dev/null 2>&1; then
       candidates=("${(@f)$(_to_search_dirs_with_fd "$root")}")
     else
@@ -349,9 +325,24 @@ _to_index_rebuild_tsv() {
       seen+=("$key")
       is_git=0
       [[ -d "$key/.git" ]] && is_git=1
-      printf '%s\t%s\t%s\t%s\n' "$key" "${key:t}" "${(L)key:t}" "$is_git" >> "$TO_INDEX_TSV_FILE"
+      printf '%s\t%s\t%s\t%s\n' "$key" "${key:t}" "${(L)key:t}" "$is_git" >> "$output_file"
     done
   done
+}
+
+_to_index_rebuild_sqlite() {
+  local tmp="$TO_CONFIG_HOME/index.tsv.tmp.$$"
+
+  mkdir -p "$TO_CONFIG_HOME" || return 1
+  _to_index_collect_tsv "$tmp" || return 1
+  sqlite3 "$TO_INDEX_FILE" "drop table if exists dirs; create table dirs(path text primary key, name text not null, lower_name text not null, is_git integer not null);" || return 1
+  sqlite3 "$TO_INDEX_FILE" ".mode tabs" ".import $tmp dirs" || return 1
+  sqlite3 "$TO_INDEX_FILE" "create index idx_dirs_lower_name on dirs(lower_name); create index idx_dirs_is_git on dirs(is_git); create index idx_dirs_path on dirs(path);" || return 1
+  rm -f "$tmp"
+}
+
+_to_index_rebuild_tsv() {
+  _to_index_collect_tsv "$TO_INDEX_TSV_FILE"
 }
 
 _to_reindex() {
@@ -820,6 +811,7 @@ _to_doctor() {
   fi
   print -r -- "max depth: $TO_MAX_DEPTH"
   print -r -- "path fragment search: $TO_SEARCH_PATH_FRAGMENTS"
+  print -r -- "follow symlinks: $TO_FOLLOW_SYMLINKS"
 }
 
 _to_add_alias() {
@@ -891,7 +883,9 @@ _to_git_repo_matches() {
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
     if command -v fd >/dev/null 2>&1; then
-      candidates=("${(@f)$(fd --hidden --follow --max-depth "$TO_MAX_DEPTH" --type d --glob .git "$root" 2>/dev/null)}")
+      local -a follow_args
+      (( TO_FOLLOW_SYMLINKS == 1 )) && follow_args=(--follow)
+      candidates=("${(@f)$(fd --hidden "${follow_args[@]}" --max-depth "$TO_MAX_DEPTH" --type d --glob .git "$root" 2>/dev/null)}")
     else
       candidates=("${(@f)$(find "$root" -maxdepth "$TO_MAX_DEPTH" -type d -name .git -print 2>/dev/null)}")
     fi
@@ -950,6 +944,8 @@ Usage:
 Config:
   TO_SEARCH_PATH_FRAGMENTS=0  Prefer exact directory names by default
   TO_SEARCH_PATH_FRAGMENTS=1  Also match any path containing the query
+  TO_FOLLOW_SYMLINKS=0         Do not follow symlinks while searching
+  TO_FOLLOW_SYMLINKS=1         Follow symlinks while searching
   TO_AI_COMMAND               External command that prints candidate dirs
   TO_HELPER                   Optional future Rust/helper binary path
 EOF

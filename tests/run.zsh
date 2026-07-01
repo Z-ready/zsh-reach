@@ -106,17 +106,18 @@ assert_path_eq "$PWD" "$SEARCH_ROOT/app/src/components" "recent jump"
 cd "$SEARCH_ROOT" || fail "could not enter search root"
 to use . >/dev/null
 assert_eq "$(to roots)" "${SEARCH_ROOT:A}
-${HOME_DIR:A}
-${HOME_DIR:A}/Projects" "use and roots persistence"
+${HOME_DIR:A}/Projects
+${HOME_DIR:A}/Downloads" "use and roots persistence"
 
 to unuse "$SEARCH_ROOT" >/dev/null
-assert_eq "$(to roots)" "${HOME_DIR:A}
-${HOME_DIR:A}/Projects" "unuse removes root"
+assert_eq "$(to roots)" "${HOME_DIR:A}/Projects
+${HOME_DIR:A}/Downloads" "unuse removes root"
 
 doctor_output="$(to --doctor)"
 [[ "$doctor_output" == *"to config: $CONFIG/config.zsh"* ]] || fail "doctor config path"
 [[ "$doctor_output" == *"max depth: 8"* ]] || fail "doctor max depth"
 [[ "$doctor_output" == *"path fragment search: 0"* ]] || fail "doctor path fragment search"
+[[ "$doctor_output" == *"follow symlinks: 0"* ]] || fail "doctor follow symlinks"
 [[ "$doctor_output" == *"sqlite3:"* ]] || fail "doctor sqlite status"
 ok "doctor output"
 
