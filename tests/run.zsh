@@ -28,6 +28,11 @@ assert_path_eq() {
   assert_eq "$got" "$expected" "$name"
 }
 
+sql_quote() {
+  local value="${1//\'/\'\'}"
+  print -r -- "'$value'"
+}
+
 ROOT="${TMPDIR:-/tmp}/to-test.$$"
 CONFIG="$ROOT/config"
 HOME_DIR="$ROOT/home"
@@ -117,9 +122,9 @@ if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
   (( token_dir_id_count >= 1 )) || fail "tokens.dir_id was not populated"
   ok "index uses dir ids for tokens"
 
-  root_meta_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from roots where path = '${SEARCH_ROOT:A}';")"
+  root_meta_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from roots where path = $(sql_quote "${SEARCH_ROOT:A}");")"
   assert_eq "$root_meta_count" "1" "reindex records root metadata"
-  root_config_key="$(sqlite3 "$TO_INDEX_FILE" "select config_key from roots where path = '${SEARCH_ROOT:A}';")"
+  root_config_key="$(sqlite3 "$TO_INDEX_FILE" "select config_key from roots where path = $(sql_quote "${SEARCH_ROOT:A}");")"
   [[ "$root_config_key" == *"depth=$TO_MAX_DEPTH"* ]] || fail "root metadata did not record config key"
   ok "reindex records root config metadata"
 
@@ -147,15 +152,15 @@ if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
   touch "$SEARCH_ROOT"
   to --reindex >/dev/null 2>&1
   reindex_stale_path="${SEARCH_ROOT:A}/reindex-stale"
-  reindex_stale_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = '$reindex_stale_path';")"
+  reindex_stale_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = $(sql_quote "$reindex_stale_path");")"
   assert_eq "$reindex_stale_count" "0" "changed root refresh removes stale directories"
 
   mv "$SEARCH_ROOT/moved-before" "$SEARCH_ROOT/moved-after" || fail "could not move indexed fixture"
   sleep 1
   touch "$SEARCH_ROOT"
   to --reindex >/dev/null 2>&1
-  moved_before_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = '${SEARCH_ROOT:A}/moved-before';")"
-  moved_after_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = '${SEARCH_ROOT:A}/moved-after';")"
+  moved_before_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = $(sql_quote "${SEARCH_ROOT:A}/moved-before");")"
+  moved_after_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = $(sql_quote "${SEARCH_ROOT:A}/moved-after");")"
   assert_eq "$moved_before_count" "0" "changed root refresh removes moved source"
   assert_eq "$moved_after_count" "1" "changed root refresh indexes moved destination"
 
@@ -182,7 +187,7 @@ stale_matches="$(_to_index_query exact stale-cache)"
 assert_eq "$stale_matches" "" "stale index paths are filtered"
 if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
   stale_path="${SEARCH_ROOT:A}/stale-cache"
-  stale_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = '$stale_path';")"
+  stale_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = $(sql_quote "$stale_path");")"
   assert_eq "$stale_count" "0" "stale sqlite row is deleted"
 fi
 
@@ -192,9 +197,9 @@ to -r "$SEARCH_ROOT" new-cache-target
 assert_path_eq "$PWD" "$SEARCH_ROOT/new-cache-target" "fallback search finds new directory"
 if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
   cached_path="${SEARCH_ROOT:A}/new-cache-target"
-  cached_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = '$cached_path';")"
+  cached_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = $(sql_quote "$cached_path");")"
   assert_eq "$cached_count" "1" "fallback result is written to sqlite"
-  cached_token_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from tokens t join dirs d on d.id = t.dir_id where d.path = '$cached_path' and t.token = 'cache';")"
+  cached_token_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from tokens t join dirs d on d.id = t.dir_id where d.path = $(sql_quote "$cached_path") and t.token = 'cache';")"
   assert_eq "$cached_token_count" "1" "fallback result tokens are written to sqlite"
 fi
 
@@ -203,7 +208,7 @@ to -r "$SEARCH_ROOT" assignment
 assert_path_eq "$PWD" "$SEARCH_ROOT/Assignment" "exact directory name wins over children"
 if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
   assignment_path="${SEARCH_ROOT:A}/Assignment"
-  assignment_hits="$(sqlite3 "$TO_INDEX_FILE" "select hit_count from dirs where path = '$assignment_path';")"
+  assignment_hits="$(sqlite3 "$TO_INDEX_FILE" "select hit_count from dirs where path = $(sql_quote "$assignment_path");")"
   (( assignment_hits >= 1 )) || fail "hit_count was not updated for Assignment"
   ok "successful jump updates hit_count"
 fi

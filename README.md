@@ -26,6 +26,7 @@ Install `to`:
 
 ```zsh
 brew tap Z-ready/zsh-to https://github.com/Z-ready/zsh-to
+brew trust --formula z-ready/zsh-to/to
 brew install to
 ```
 
@@ -73,6 +74,7 @@ to --version
 
 ```zsh
 brew tap Z-ready/zsh-to https://github.com/Z-ready/zsh-to
+brew trust --formula z-ready/zsh-to/to
 brew install to
 ```
 
