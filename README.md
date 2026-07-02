@@ -1,10 +1,9 @@
 # to
 
-`to` is an exploratory directory jumper for zsh.
+`to` is an **exploratory directory jumper for zsh**.
 
-zoxide optimizes history: it gets better after you visit directories.
-`to` optimizes discovery: it indexes configured roots, then jumps to matching
-folders even if you have never visited them before.
+It helps you jump to local folders by name, path fragment, keyword, workspace,
+alias, recent destination, or Git repository.
 
 ```zsh
 to backend
@@ -13,18 +12,76 @@ to app backend
 to repo nginx
 ```
 
-Because `cd` must run in the current shell, `to` is loaded as a zsh function.
-The optional Rust helper accelerates SQLite queries, while zsh still performs
-the final `cd`.
+zoxide optimizes history: it gets better after you visit directories.
+`to` optimizes discovery: it indexes configured roots and finds matching
+folders even if you have never visited them before.
+
+[Getting started](#getting-started) • [Installation](#installation) •
+[Usage](#usage) • [Configuration](#configuration) •
+[Performance](#performance) • [Troubleshooting](#troubleshooting)
 
 ## Getting Started
 
-Install with Homebrew:
+Install `to`:
 
 ```zsh
 brew tap Z-ready/zsh-to https://github.com/Z-ready/zsh-to
 brew install to
 ```
+
+Add this to the end of `~/.zshrc`:
+
+```zsh
+eval "$(to init zsh)"
+```
+
+Reload zsh:
+
+```zsh
+source ~/.zshrc
+```
+
+Add a focused search root:
+
+```zsh
+to use ~/Projects
+```
+
+Build the initial index:
+
+```zsh
+to --reindex
+```
+
+Jump:
+
+```zsh
+to backend
+```
+
+## Installation
+
+`to` can be installed with Homebrew.
+
+### 1. Install `to`
+
+```zsh
+brew tap Z-ready/zsh-to https://github.com/Z-ready/zsh-to
+brew install to
+```
+
+Homebrew installs the full runtime environment:
+
+| Dependency | Why it is installed |
+| --- | --- |
+| `fd` | Fast filesystem discovery |
+| `fzf` | Interactive result selection |
+| `sqlite` | Index, aliases, workspaces, recent entries, ranking data |
+| `fswatch` | Optional filesystem watching on macOS |
+| `inotify-tools` | Optional filesystem watching on Linux |
+| `rust` | Build-time only, used to compile `to-helper` |
+
+### 2. Set up zsh
 
 Add this to `~/.zshrc`:
 
@@ -32,22 +89,27 @@ Add this to `~/.zshrc`:
 eval "$(to init zsh)"
 ```
 
-Reload zsh and add a focused search root:
+This loads the zsh function that performs the final `cd`.
+
+If you prefer direct sourcing:
 
 ```zsh
-source ~/.zshrc
-to use ~/Projects
-to --reindex
-to backend
+source "$(brew --prefix to)/share/to/to.plugin.zsh"
 ```
 
-Homebrew installs the normal runtime environment for the full experience:
-`fd`, `fzf`, `sqlite`, and a filesystem watcher (`fswatch` on macOS,
-`inotify-tools` on Linux). Rust is used only while building `to-helper`.
+### 3. Optional: rebuild zsh completions
 
-## What It Does
+Homebrew installs zsh completions. If completions do not appear:
 
-`to` searches directory trees you choose:
+```zsh
+rm -f ~/.zcompdump*
+autoload -Uz compinit
+compinit
+```
+
+### 4. Configure roots
+
+`to` searches configured roots. Add narrow roots first:
 
 ```zsh
 to use ~/Projects
@@ -55,21 +117,173 @@ to use ~/Downloads
 to roots
 ```
 
-Then it resolves queries in this order:
+Avoid using your whole home directory as the only root unless you really want
+that scan:
 
-1. Built-in aliases, such as `download` and `desktop`.
-2. User aliases from `to add`.
-3. Workspaces from `to workspace`.
-4. SQLite exact-name matches.
-5. SQLite Git repo matches.
-6. SQLite token matches for multi-word queries.
-7. SQLite path-fragment matches.
-8. `fd` discovery, with `find` fallback.
+```zsh
+to use ~
+```
 
-If a database path is stale, `to` removes it, falls back to filesystem
-discovery, and writes the fresh result back into the index.
+## Usage
 
-## Commands
+### Basic jumps
+
+Jump to a directory by exact name:
+
+```zsh
+to backend
+```
+
+Jump by path fragment:
+
+```zsh
+to src/components
+```
+
+Jump by multiple keywords:
+
+```zsh
+to app backend
+```
+
+Force interactive selection:
+
+```zsh
+to -i backend
+```
+
+Temporarily search from one root:
+
+```zsh
+to -r ~/Projects backend
+to --from ~/Projects backend
+```
+
+### Built-in aliases
+
+These aliases work when the target directories exist:
+
+```text
+download / downloads -> ~/Downloads
+desktop              -> ~/Desktop
+document/documents   -> ~/Documents
+project/projects     -> ~/Projects
+code                 -> ~/Code
+```
+
+Example:
+
+```zsh
+to download
+```
+
+### User aliases
+
+Add an alias:
+
+```zsh
+to add blog ~/Documents/obsidian/blog
+```
+
+Use it:
+
+```zsh
+to blog
+```
+
+List aliases:
+
+```zsh
+to aliases
+```
+
+Remove an alias:
+
+```zsh
+to remove blog
+```
+
+### Search roots
+
+Add the current directory:
+
+```zsh
+to use .
+```
+
+Add a specific directory:
+
+```zsh
+to use ~/Projects
+```
+
+List roots:
+
+```zsh
+to roots
+```
+
+Remove a root:
+
+```zsh
+to unuse ~/Projects
+```
+
+### Workspaces
+
+Workspaces are named destinations:
+
+```zsh
+to workspace work ~/Documents/work
+to work work
+```
+
+List workspaces:
+
+```zsh
+to workspaces
+```
+
+Remove a workspace:
+
+```zsh
+to unwork work
+```
+
+### Git repositories
+
+Jump to an indexed Git repository:
+
+```zsh
+to repo nginx
+```
+
+`to` detects `.git` directories during indexing and stores that metadata in
+SQLite, so `to repo <query>` does not need to inspect every candidate live.
+
+### Recent destinations
+
+Jump from recent successful destinations:
+
+```zsh
+to recent
+```
+
+### AI hooks
+
+`to` does not bundle a hosted AI model. It provides hooks for users who want
+to connect their own local or remote ranker.
+
+Use broad AI-style fallback search:
+
+```zsh
+to ai docker
+```
+
+Set `TO_AI_COMMAND` to provide candidates for `to ai <query...>`.
+Set `TO_AI_RANK_COMMAND` to reorder normal fallback candidates from stdin.
+
+## Command Reference
 
 ```zsh
 to <query...>             # search and cd to a matching directory
@@ -95,6 +309,7 @@ to repo nginx             # jump to a matching Git repository
 to recent                 # jump from recent destinations
 to ai docker              # use TO_AI_COMMAND, or broad fallback search
 
+to init zsh               # print zsh integration script
 to --reindex              # refresh the SQLite/TSV directory index
 to --watch                # watch roots and reindex after filesystem changes
 to --doctor               # check dependencies and config
@@ -103,17 +318,18 @@ to --doctor               # check dependencies and config
 When multiple matches are found, `to` opens `fzf`. If `fzf` is unavailable, it
 prints a numbered list.
 
-## Matching Examples
+## Matching
 
-Built-in aliases:
+Resolution order:
 
-```text
-download / downloads -> ~/Downloads
-desktop              -> ~/Desktop
-document/documents   -> ~/Documents
-project/projects     -> ~/Projects
-code                 -> ~/Code
-```
+1. Built-in aliases.
+2. User aliases.
+3. Workspaces.
+4. SQLite exact-name matches.
+5. SQLite Git repo matches.
+6. SQLite token matches for multi-word queries.
+7. SQLite path-fragment matches.
+8. `fd` discovery, with `find` fallback.
 
 Exact directory names win for plain single-word queries:
 
@@ -121,8 +337,8 @@ Exact directory names win for plain single-word queries:
 to assignment
 ```
 
-If `~/Downloads/Assignment` exists, `to` jumps there instead of listing every
-child directory below it.
+If `~/Downloads/Assignment` exists, `to assignment` jumps there instead of
+listing every child directory below it.
 
 Path fragments work when the query contains a slash:
 
@@ -136,97 +352,11 @@ Multi-word queries require every token to appear somewhere in the path:
 to app backend
 ```
 
-Git-aware search uses `.git` detected during indexing:
+Plain single-word path-fragment matching is disabled by default. Enable it
+only if you want broader results:
 
 ```zsh
-to repo nginx
-```
-
-User shortcuts:
-
-```zsh
-to add blog ~/Documents/obsidian/blog
-to blog
-
-to workspace work ~/Documents/work
-to work work
-```
-
-Recent destinations:
-
-```zsh
-to recent
-```
-
-## Performance
-
-`to` does not run a background daemon. Idle cost is effectively zero.
-
-Normal jumps are index-first:
-
-```text
-query -> SQLite -> validate path -> cd
-                  -> fallback to fd/find on miss or stale path
-                  -> write fresh result back to SQLite
-```
-
-The SQLite index stores:
-
-```sql
-dirs(id, path, name, parent, depth, is_git, last_seen, last_used, hit_count)
-tokens(token, dir_id)
-roots(path, mtime, config_key, last_indexed)
-aliases(name, path)
-workspaces(name, path)
-recent(path, last_used)
-```
-
-That makes common developer queries cheap:
-
-```zsh
-to backend        # exact-name or token query
-to app backend    # token query
-to repo nginx     # Git repo + token query
-```
-
-Successful jumps update `hit_count` and `last_used`, so ranking improves with
-use. Results are ordered roughly as:
-
-```text
-exact name > recent/frequent > shallower depth > shorter path
-```
-
-`to --reindex` is incremental for SQLite. It records root mtime and
-index-affecting config, skips unchanged roots, refreshes changed roots, adds
-new directories, and prunes stale directories under refreshed roots.
-
-Broader modes cost more:
-
-- `to src/components` searches a path fragment.
-- `to -i backend` collects all matches for selection.
-- `TO_SEARCH_PATH_FRAGMENTS=1` lets single words match anywhere in a path.
-- `to --watch` runs a foreground watcher and reindexes after filesystem events.
-
-For large machines, prefer focused roots:
-
-```zsh
-to use ~/Projects
-to use ~/Downloads
-```
-
-Avoid using your whole home directory as the only root unless you really want
-that scan:
-
-```zsh
-to use ~
-```
-
-Low-energy defaults:
-
-```zsh
-TO_MAX_DEPTH=5
-TO_SEARCH_PATH_FRAGMENTS=0
-TO_FOLLOW_SYMLINKS=0
+TO_SEARCH_PATH_FRAGMENTS=1
 ```
 
 ## Configuration
@@ -263,17 +393,18 @@ TO_AI_RANK_COMMAND=""
 TO_HELPER=""
 ```
 
-Important options:
+Options:
 
-- `TO_MAX_DEPTH`: maximum scan depth for each root.
-- `TO_SEARCH_PATH_FRAGMENTS`: set to `1` to let plain single words match
-  anywhere in a path.
-- `TO_FOLLOW_SYMLINKS`: set to `1` to scan through symlinked directories.
-- `TO_WATCH_DEBOUNCE`: seconds to wait before reindexing after watcher events.
-- `TO_AI_COMMAND`: external command for `to ai <query...>`.
-- `TO_AI_RANK_COMMAND`: external command that ranks normal candidate paths from
-  stdin. The query is passed as its first argument.
-- `TO_HELPER`: explicit path to `to-helper`; otherwise `to` auto-detects it.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `TO_MAX_DEPTH` | `8` | Maximum scan depth per root |
+| `TO_INTERACTIVE_THRESHOLD` | `3` | Result count where selection becomes useful |
+| `TO_SEARCH_PATH_FRAGMENTS` | `0` | Let plain words match anywhere in paths |
+| `TO_FOLLOW_SYMLINKS` | `0` | Search through symlinked directory trees |
+| `TO_WATCH_DEBOUNCE` | `2` | Seconds to wait before watcher reindex |
+| `TO_AI_COMMAND` | empty | External command for `to ai <query...>` |
+| `TO_AI_RANK_COMMAND` | empty | External command that ranks candidates from stdin |
+| `TO_HELPER` | auto | Explicit path to `to-helper` |
 
 Persistent state lives under `~/.config/to` by default:
 
@@ -286,52 +417,66 @@ recent        text fallback for recent jumps
 index.tsv     fallback directory index when sqlite3 is unavailable
 ```
 
-Set `TO_CONFIG_HOME` before sourcing the plugin to use another config
-directory.
-
-## Shell Integration
-
-`to` is a zsh plugin:
+Set `TO_CONFIG_HOME` before loading the plugin to use another config
+directory:
 
 ```zsh
+TO_CONFIG_HOME="$HOME/.local/state/to"
 eval "$(to init zsh)"
 ```
 
-If you prefer to source the plugin directly:
+## Performance
 
-```zsh
-source "$(brew --prefix to)/share/to/to.plugin.zsh"
+`to` does not run a background daemon. Idle cost is effectively zero.
+
+Normal jumps are index-first:
+
+```text
+query -> SQLite -> validate path -> cd
+                  -> fallback to fd/find on miss or stale path
+                  -> write fresh result back to SQLite
 ```
 
-Completions are installed by Homebrew. If completions do not appear, make sure
-your zsh config runs `compinit`, then rebuild the completion cache:
+The SQLite index stores:
 
-```zsh
-rm -f ~/.zcompdump*
-autoload -Uz compinit
-compinit
+```sql
+dirs(id, path, name, parent, depth, is_git, last_seen, last_used, hit_count)
+tokens(token, dir_id)
+roots(path, mtime, config_key, last_indexed)
+aliases(name, path)
+workspaces(name, path)
+recent(path, last_used)
 ```
 
-## AI Hook
+Successful jumps update `hit_count` and `last_used`, so ranking improves with
+use. Results are ordered roughly as:
 
-`to` does not bundle a hosted AI model. Instead, `TO_AI_COMMAND` and
-`TO_AI_RANK_COMMAND` are extension points for users who want to connect a local
-or remote ranker.
+```text
+exact name > recent/frequent > shallower depth > shorter path
+```
 
-When set, `to ai <query...>` runs that command with the query and expects it to
-print candidate directories, one per line. `to` validates candidates before
-jumping.
+`to --reindex` is incremental for SQLite. It records root mtime and
+index-affecting config, skips unchanged roots, refreshes changed roots, adds
+new directories, and prunes stale directories under refreshed roots.
 
-Without `TO_AI_COMMAND`, `to ai` uses the broad built-in fallback search.
+Broader modes cost more:
 
-When `TO_AI_RANK_COMMAND` is set, normal filesystem fallback candidates are
-sent to the command on stdin and the query is passed as the first argument. The
-command should print ranked candidate paths, one per line. `to` validates the
-output and appends any omitted original candidates after the ranked results.
+- `to src/components` searches a path fragment.
+- `to -i backend` collects all matches for selection.
+- `TO_SEARCH_PATH_FRAGMENTS=1` lets single words match anywhere in a path.
+- `to --watch` runs a foreground watcher and reindexes after filesystem events.
+
+For lower energy use on large machines, prefer:
+
+```zsh
+TO_MAX_DEPTH=5
+TO_SEARCH_PATH_FRAGMENTS=0
+TO_FOLLOW_SYMLINKS=0
+```
 
 ## Troubleshooting
 
-Check your environment:
+Check the environment:
 
 ```zsh
 to --doctor
@@ -343,25 +488,31 @@ Refresh the index:
 to --reindex
 ```
 
-Force interactive selection:
+Confirm zsh integration:
+
+```zsh
+to init zsh
+```
+
+Force selection if the automatic choice is not what you want:
 
 ```zsh
 to -i backend
 ```
 
-Temporarily search a specific tree:
+Search one tree without changing saved roots:
 
 ```zsh
 to -r ~/Projects backend
 ```
 
-If `to` finds too many matches, keep path-fragment search disabled:
+If `to` finds too many matches, keep broad path search disabled:
 
 ```zsh
 TO_SEARCH_PATH_FRAGMENTS=0
 ```
 
-If `to` is slow, reduce roots and depth:
+If `to` is slow, check roots and reduce depth:
 
 ```zsh
 to roots
