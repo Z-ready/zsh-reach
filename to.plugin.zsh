@@ -10,7 +10,7 @@ typeset -g TO_SEARCH_PATH_FRAGMENTS
 typeset -g TO_FOLLOW_SYMLINKS
 typeset -g TO_WATCH_DEBOUNCE
 typeset -g _TO_SQLITE_SCHEMA_READY_FILE
-typeset -r _TO_VERSION="1.1.6"
+typeset -r _TO_VERSION="1.1.7"
 
 _to_apply_positive_int_default() {
   local name="$1"
@@ -202,7 +202,21 @@ _to_dir_index_row() {
 }
 
 _to_root_mtime() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || print -r -- 0
+  local value
+
+  value="$(stat -f %m "$1" 2>/dev/null)"
+  if [[ "$value" == <-> ]]; then
+    print -r -- "$value"
+    return 0
+  fi
+
+  value="$(stat -c %Y "$1" 2>/dev/null)"
+  if [[ "$value" == <-> ]]; then
+    print -r -- "$value"
+    return 0
+  fi
+
+  print -r -- 0
 }
 
 _to_index_config_key() {

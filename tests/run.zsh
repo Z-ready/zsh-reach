@@ -77,12 +77,28 @@ assert_eq "$TO_INTERACTIVE_THRESHOLD" "3" "invalid config interactive threshold 
 assert_eq "$TO_SEARCH_PATH_FRAGMENTS" "0" "invalid config path fragment setting falls back to default"
 assert_eq "$TO_FOLLOW_SYMLINKS" "0" "invalid config symlink setting falls back to default"
 assert_eq "$TO_WATCH_DEBOUNCE" "2" "invalid config watch debounce falls back to default"
-assert_eq "$(to --version)" "to 1.1.6" "plugin version output"
+assert_eq "$(to --version)" "to 1.1.7" "plugin version output"
 assert_eq "$(to roots)" "${HOME_DIR:A}/Projects
 ${HOME_DIR:A}/i
 ${HOME_DIR:A}/Downloads" "source ignores stale in-shell roots"
 assert_eq "$TO_WATCH_DEBOUNCE" "2" "watch debounce default"
 assert_eq "$TO_AI_RANK_COMMAND" "" "ai rank command default"
+
+STAT_BIN="$ROOT/stat-bin"
+mkdir -p "$STAT_BIN"
+cat > "$STAT_BIN/stat" <<'EOF'
+#!/usr/bin/env zsh
+if [[ "$1" == "-f" ]]; then
+  print -r -- /
+else
+  print -r -- 1234567890
+fi
+EOF
+chmod +x "$STAT_BIN/stat"
+OLD_PATH="$PATH"
+PATH="$STAT_BIN:$PATH"
+assert_eq "$(_to_root_mtime "$SEARCH_ROOT")" "1234567890" "linux stat mount output falls back to mtime"
+PATH="$OLD_PATH"
 
 if to -r "$ROOT/empty-root" no-state-match >/dev/null 2>&1; then
   fail "empty root should not resolve missing directory"
@@ -352,7 +368,7 @@ bin_doctor_output="$("$TEST_DIR/../bin/to" --doctor)"
 [[ "$bin_doctor_output" == *"max depth: 8"* ]] || fail "bin wrapper doctor config defaults"
 ok "bin wrapper runs doctor before shell integration"
 
-assert_eq "$("$TEST_DIR/../bin/to" --version)" "to 1.1.6" "bin wrapper version output"
+assert_eq "$("$TEST_DIR/../bin/to" --version)" "to 1.1.7" "bin wrapper version output"
 
 bin_roots_output="$("$TEST_DIR/../bin/to" roots)"
 assert_eq "$bin_roots_output" "${HOME_DIR:A}/Projects
