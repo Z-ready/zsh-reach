@@ -237,6 +237,9 @@ if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
   repo_match="$(_to_index_query git nginx | head -n 1)"
   assert_path_eq "$repo_match" "$SEARCH_ROOT/repos/nginx" "git repo query uses token index"
 fi
+missing_repo_output="$(to repo missing-repo 2>&1 >/dev/null)"
+[[ "$missing_repo_output" == *"no matching Git repository"* ]] || fail "missing repo did not explain failure: $missing_repo_output"
+ok "missing git repo reports no match"
 
 : > "$TO_RECENT_FILE"
 if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
@@ -250,6 +253,11 @@ if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
   recent_path="$(sqlite3 "$TO_INDEX_FILE" "select path from recent order by last_used desc, rowid desc limit 1;")"
   assert_path_eq "$recent_path" "$SEARCH_ROOT/app/src/components" "recent destination is stored in sqlite"
 fi
+
+cd "$ROOT" || fail "could not reset cwd"
+missing_dir_output="$(to does-not-exist-here 2>&1 >/dev/null)"
+[[ "$missing_dir_output" == *"no matching directory"* ]] || fail "missing directory did not explain failure: $missing_dir_output"
+ok "missing directory reports no match"
 
 cd "$SEARCH_ROOT" || fail "could not enter search root"
 to use . >/dev/null

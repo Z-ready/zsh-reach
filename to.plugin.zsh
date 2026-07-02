@@ -1924,11 +1924,20 @@ to() {
         print -u2 -- "to: usage: to repo <query>"
         return 2
       }
-      target="$(_to_choose_match 0 "${(@f)$(_to_git_repo_matches "$1")}")" || return
+      target="$(_to_choose_match 0 "${(@f)$(_to_git_repo_matches "$1")}")"
+      if [[ $? -ne 0 || -z "$target" ]]; then
+        print -u2 -- "to: no matching Git repository: $1"
+        print -u2 -- "to: add the parent directory with: to use <dir>"
+        return 1
+      fi
       cd "$target" && _to_after_cd "$PWD"
       ;;
     recent)
-      target="$(_to_choose_match 0 "${(@f)$(_to_recent_dirs)}")" || return
+      target="$(_to_choose_match 0 "${(@f)$(_to_recent_dirs)}")"
+      if [[ $? -ne 0 || -z "$target" ]]; then
+        print -u2 -- "to: no recent directories"
+        return 1
+      fi
       cd "$target" && _to_after_cd "$PWD"
       ;;
     workspace)
@@ -1956,7 +1965,11 @@ to() {
         print -u2 -- "to: usage: to ai <query...>"
         return 2
       }
-      target="$(_to_choose_match 0 "${(@f)$(_to_ai_matches "$@")}")" || return
+      target="$(_to_choose_match 0 "${(@f)$(_to_ai_matches "$@")}")"
+      if [[ $? -ne 0 || -z "$target" ]]; then
+        print -u2 -- "to: no AI/fallback matches: ${(j: :)@}"
+        return 1
+      fi
       cd "$target" && _to_after_cd "$PWD"
       ;;
     --doctor)
@@ -1984,8 +1997,12 @@ to() {
           return
         fi
       fi
-      target="$(_to_resolve "$@")" || return
-      [[ -n "$target" ]] || return 1
+      target="$(_to_resolve "$@")"
+      if [[ $? -ne 0 || -z "$target" ]]; then
+        print -u2 -- "to: no matching directory: ${(j: :)@}"
+        print -u2 -- "to: add a search root with: to use <dir>"
+        return 1
+      fi
       cd "$target" && _to_after_cd "$PWD"
       ;;
   esac
