@@ -10,7 +10,7 @@ typeset -g TO_SEARCH_PATH_FRAGMENTS
 typeset -g TO_FOLLOW_SYMLINKS
 typeset -g TO_WATCH_DEBOUNCE
 typeset -g _TO_SQLITE_SCHEMA_READY_FILE
-typeset -r _TO_VERSION="1.1.8"
+typeset -r _TO_VERSION="1.1.9"
 
 _to_apply_positive_int_default() {
   local name="$1"
@@ -585,18 +585,18 @@ where path not in (
 SQL
   fi
 
-  printf '%s\t%s\n' "$now" "$dir" > "$tmp" || return 0
+  { printf '%s\t%s\n' "$now" "$dir" > "$tmp" } 2>/dev/null || return 0
 
   if [[ -r "$TO_RECENT_FILE" ]]; then
     while IFS= read -r line; do
       item="${line#*	}"
       [[ "$item" == "$line" || "${item:A}" == "$dir" ]] && continue
-      print -r -- "$line" >> "$tmp"
+      { print -r -- "$line" >> "$tmp" } 2>/dev/null || break
       (( ++count >= 49 )) && break
     done < "$TO_RECENT_FILE"
   fi
 
-  mv "$tmp" "$TO_RECENT_FILE"
+  mv "$tmp" "$TO_RECENT_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 }
 
 _to_recent_dirs() {

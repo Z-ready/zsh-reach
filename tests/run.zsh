@@ -78,7 +78,7 @@ assert_eq "$TO_INTERACTIVE_THRESHOLD" "3" "invalid config interactive threshold 
 assert_eq "$TO_SEARCH_PATH_FRAGMENTS" "0" "invalid config path fragment setting falls back to default"
 assert_eq "$TO_FOLLOW_SYMLINKS" "0" "invalid config symlink setting falls back to default"
 assert_eq "$TO_WATCH_DEBOUNCE" "2" "invalid config watch debounce falls back to default"
-assert_eq "$(to --version)" "to 1.1.8" "plugin version output"
+assert_eq "$(to --version)" "to 1.1.9" "plugin version output"
 assert_eq "$(to roots)" "${HOME_DIR:A}/Projects
 ${HOME_DIR:A}/i
 ${HOME_DIR:A}/Pictures
@@ -376,7 +376,7 @@ bin_doctor_output="$("$TEST_DIR/../bin/to" --doctor)"
 [[ "$bin_doctor_output" == *"max depth: 8"* ]] || fail "bin wrapper doctor config defaults"
 ok "bin wrapper runs doctor before shell integration"
 
-assert_eq "$("$TEST_DIR/../bin/to" --version)" "to 1.1.8" "bin wrapper version output"
+assert_eq "$("$TEST_DIR/../bin/to" --version)" "to 1.1.9" "bin wrapper version output"
 
 bin_roots_output="$("$TEST_DIR/../bin/to" roots)"
 assert_eq "$bin_roots_output" "${HOME_DIR:A}/Projects
@@ -386,7 +386,7 @@ ${HOME_DIR:A}/Downloads" "bin wrapper runs roots before shell integration"
 
 READONLY_CONFIG="$ROOT/readonly-config"
 READONLY_HOME="$ROOT/readonly-home"
-mkdir -p "$READONLY_CONFIG" "$READONLY_HOME/Projects"
+mkdir -p "$READONLY_CONFIG" "$READONLY_HOME/Projects/missing-target"
 TO_CONFIG_HOME="$READONLY_CONFIG" HOME="$READONLY_HOME" zsh -fc '
   source "$1"
   _to_index_ensure_sqlite_schema >/dev/null || exit 1
@@ -399,5 +399,20 @@ TO_CONFIG_HOME="$READONLY_CONFIG" HOME="$READONLY_HOME" zsh -fc '
   esac
 ' zsh "$TEST_DIR/../to.plugin.zsh" || fail "readonly sqlite should not leak low-level errors"
 ok "readonly sqlite reports user-facing miss"
+
+TO_CONFIG_HOME="$READONLY_CONFIG" HOME="$READONLY_HOME" zsh -fc '
+  source "$1"
+  chmod 555 "$TO_CONFIG_HOME"
+  cd "$HOME" || exit 1
+  output="$(to missing-target 2>&1 >/dev/null)"
+  code=$?
+  chmod 755 "$TO_CONFIG_HOME"
+  [[ "$code" == 0 ]] || exit 1
+  case "$output" in
+    *"operation not permitted"*|*"permission denied"*) exit 2 ;;
+  esac
+' zsh "$TEST_DIR/../to.plugin.zsh" || fail "recent write failure should not leak low-level errors"
+chmod 755 "$READONLY_CONFIG"
+ok "recent write failure stays quiet after successful jump"
 
 print -- "all tests passed"
