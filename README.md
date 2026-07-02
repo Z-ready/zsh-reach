@@ -187,6 +187,7 @@ directories that exist on your machine:
 ~/git
 ~/i
 ~/Documents
+~/Pictures
 ~/Downloads
 ~/Desktop
 ```
@@ -289,7 +290,9 @@ to remove blog
 
 `to` automatically includes common existing development directories such as
 `~/Projects`, `~/Code`, `~/Developer`, `~/dev`, `~/src`, `~/workspace`,
-`~/repos`, `~/git`, and `~/i`.
+`~/repos`, `~/git`, and `~/i`. It also includes common user-content
+directories such as `~/Documents`, `~/Pictures`, `~/Downloads`, and
+`~/Desktop` when they exist.
 
 Add the current directory:
 

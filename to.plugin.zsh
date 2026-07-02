@@ -10,7 +10,7 @@ typeset -g TO_SEARCH_PATH_FRAGMENTS
 typeset -g TO_FOLLOW_SYMLINKS
 typeset -g TO_WATCH_DEBOUNCE
 typeset -g _TO_SQLITE_SCHEMA_READY_FILE
-typeset -r _TO_VERSION="1.1.7"
+typeset -r _TO_VERSION="1.1.8"
 
 _to_apply_positive_int_default() {
   local name="$1"
@@ -139,6 +139,7 @@ _to_load_roots() {
     "$HOME/git"
     "$HOME/i"
     "$HOME/Documents"
+    "$HOME/Pictures"
     "$HOME/Downloads"
     "$HOME/Desktop"
   )
@@ -291,7 +292,7 @@ _to_index_ensure_sqlite_schema() {
   fi
 
   mkdir -p "$TO_CONFIG_HOME" || return 1
-  sqlite3 "$TO_INDEX_FILE" >/dev/null <<SQL || return 1
+  sqlite3 "$TO_INDEX_FILE" >/dev/null 2>/dev/null <<SQL || return 1
 create table if not exists dirs(
   id integer primary key,
   path text unique not null,
@@ -344,7 +345,7 @@ SQL
     [[ "$has_last_seen" == 1 ]] || sqlite3 "$TO_INDEX_FILE" "alter table dirs add column last_seen integer not null default 0;" >/dev/null 2>/dev/null
     [[ "$has_last_used" == 1 ]] || sqlite3 "$TO_INDEX_FILE" "alter table dirs add column last_used integer not null default 0;" >/dev/null 2>/dev/null
     [[ "$has_hit_count" == 1 ]] || sqlite3 "$TO_INDEX_FILE" "alter table dirs add column hit_count integer not null default 0;" >/dev/null 2>/dev/null
-    sqlite3 "$TO_INDEX_FILE" >/dev/null <<SQL || return 1
+    sqlite3 "$TO_INDEX_FILE" >/dev/null 2>/dev/null <<SQL || return 1
 alter table dirs rename to dirs_legacy;
 create table dirs(
   id integer primary key,
@@ -388,7 +389,7 @@ SQL
 
   if [[ "$has_token_dir_id" != 1 ]]; then
     if [[ "$has_token_path" == 1 ]]; then
-      sqlite3 "$TO_INDEX_FILE" >/dev/null <<SQL || return 1
+      sqlite3 "$TO_INDEX_FILE" >/dev/null 2>/dev/null <<SQL || return 1
 alter table tokens rename to tokens_legacy;
 create table tokens(
   token text not null,
@@ -406,7 +407,7 @@ SQL
     fi
   fi
 
-  sqlite3 "$TO_INDEX_FILE" >/dev/null <<SQL || return 1
+  sqlite3 "$TO_INDEX_FILE" >/dev/null 2>/dev/null <<SQL || return 1
 update dirs set parent = rtrim(substr(path, 1, length(path) - length(name)), '/') where parent = '';
 update dirs set depth = length(path) - length(replace(path, '/', '')) where depth = 0;
 create index if not exists idx_dirs_lower_name on dirs(lower_name);
