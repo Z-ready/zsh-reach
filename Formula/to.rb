@@ -1,9 +1,9 @@
 class To < Formula
   desc "Exploratory zsh directory jumper"
   homepage "https://github.com/Z-ready/zsh-to"
-  url "https://github.com/Z-ready/zsh-to/archive/refs/tags/v1.1.2.tar.gz"
-  sha256 "f2f24add11b5061769e1271edcfec57d53cda6c462ec56a03d460873ac93bf47"
-  version "1.1.2"
+  url "https://github.com/Z-ready/zsh-to/archive/refs/tags/v1.1.3.tar.gz"
+  sha256 "2146deb1e468bf28bd04a384e6fa4b1bf2107634e0942e5ad45a7c6858e04faf"
+  version "1.1.3"
   license "MIT"
 
   depends_on "rust" => :build
