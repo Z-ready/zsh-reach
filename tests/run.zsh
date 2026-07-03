@@ -63,6 +63,8 @@ mkdir -p \
   "$SEARCH_ROOT/projects/python/fastapi-service/app" \
   "$SEARCH_ROOT/projects/docker/nginx-stack" \
   "$SEARCH_ROOT/projects/code/auth-module/lib" \
+  "$SEARCH_ROOT/gh/issues/issue-42-login" \
+  "$SEARCH_ROOT/gh/pulls/pull-77-docs" \
   "$SEARCH_ROOT/stale-cache" \
   "$SEARCH_ROOT/reindex-stale" \
   "$SEARCH_ROOT/moved-before" \
@@ -139,7 +141,7 @@ assert_eq "$TO_AUTOWATCH" "0" "invalid config autowatch falls back to default"
 assert_eq "$TO_AUTO_ADD_ROOTS" "0" "invalid config auto add roots falls back to default"
 assert_eq "$TO_FRECENCY" "1" "invalid config frecency falls back to default"
 assert_eq "$TO_FRECENCY_THRESHOLD" "1" "invalid config frecency threshold falls back to default"
-assert_eq "$(to --version)" "to 1.4.0" "plugin version output"
+assert_eq "$(to --version)" "to 1.5.0" "plugin version output"
 assert_eq "$(to roots)" "${HOME_DIR:A}" "source ignores stale in-shell roots"
 assert_eq "$TO_WATCH_DEBOUNCE" "2" "watch debounce default"
 assert_eq "$TO_AI_RANK_COMMAND" "" "ai rank command default"
@@ -560,6 +562,43 @@ to code authenticate_user
 assert_path_eq "$PWD" "$SEARCH_ROOT/projects/code/auth-module/lib" "code object jump"
 
 cd "$ROOT" || fail "could not reset cwd"
+to issue 42
+assert_path_eq "$PWD" "$SEARCH_ROOT/gh/issues/issue-42-login" "issue shortcut jumps to local clone"
+
+cd "$ROOT" || fail "could not reset cwd"
+to pr 77
+assert_path_eq "$PWD" "$SEARCH_ROOT/gh/pulls/pull-77-docs" "pr shortcut jumps to local clone"
+
+EXTERNAL_BIN="$ROOT/external-bin"
+mkdir -p "$EXTERNAL_BIN"
+cat > "$EXTERNAL_BIN/open-url" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "$1" > "$TO_EXTERNAL_COMMAND_LOG"
+EOF
+cat > "$EXTERNAL_BIN/code" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "$1" > "$TO_EXTERNAL_COMMAND_LOG"
+EOF
+cat > "$EXTERNAL_BIN/fig" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "$1" > "$TO_EXTERNAL_COMMAND_LOG"
+EOF
+chmod +x "$EXTERNAL_BIN/open-url" "$EXTERNAL_BIN/code" "$EXTERNAL_BIN/fig"
+OLD_PATH="$PATH"
+PATH="$EXTERNAL_BIN:$PATH"
+OPEN_LOG="$ROOT/open.log"
+export TO_EXTERNAL_COMMAND_LOG="$OPEN_LOG"
+TO_OPEN_COMMAND="$EXTERNAL_BIN/open-url"
+to gh z-ready/zsh-to
+assert_eq "$(cat "$OPEN_LOG")" "https://github.com/z-ready/zsh-to" "gh shortcut opens owner repo URL"
+TO_OPEN_COMMAND=""
+to vscode backend
+assert_path_eq "$(cat "$OPEN_LOG")" "$SEARCH_ROOT/app/services/backend" "vscode shortcut opens matching directory"
+to fig backend
+assert_path_eq "$(cat "$OPEN_LOG")" "$SEARCH_ROOT/app/services/backend" "fig shortcut opens matching directory"
+PATH="$OLD_PATH"
+
+cd "$ROOT" || fail "could not reset cwd"
 to repo nginx
 assert_path_eq "$PWD" "$SEARCH_ROOT/repos/nginx" "git repo jump"
 if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
@@ -737,6 +776,7 @@ doctor_verbose_output="$(to --doctor --verbose)"
 [[ "$doctor_verbose_output" == *"Verbose"* ]] || fail "doctor verbose category"
 [[ "$doctor_verbose_output" == *"sqlite3 path:"* ]] || fail "doctor verbose sqlite path"
 [[ "$doctor_verbose_output" == *"ai rank command:"* ]] || fail "doctor verbose ai rank command status"
+[[ "$doctor_verbose_output" == *"open command:"* ]] || fail "doctor verbose open command status"
 ok "doctor output"
 
 bin_doctor_output="$("$TEST_DIR/../bin/to" --doctor)"
@@ -744,7 +784,7 @@ bin_doctor_output="$("$TEST_DIR/../bin/to" --doctor)"
 [[ "$bin_doctor_output" == *"max depth: 8"* ]] || fail "bin wrapper doctor config defaults"
 ok "bin wrapper runs doctor before shell integration"
 
-assert_eq "$("$TEST_DIR/../bin/to" --version)" "to 1.4.0" "bin wrapper version output"
+assert_eq "$("$TEST_DIR/../bin/to" --version)" "to 1.5.0" "bin wrapper version output"
 
 bin_roots_output="$("$TEST_DIR/../bin/to" roots)"
 assert_eq "$bin_roots_output" "${HOME_DIR:A}" "bin wrapper runs roots before shell integration"

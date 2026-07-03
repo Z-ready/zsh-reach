@@ -23,6 +23,8 @@ After initialization, the zsh function named `to` handles directory jumps:
   to git
   to cargo tokio
   to code auth
+  to gh z-ready/zsh-to
+  to vscode backend
 
 After shell integration, `to` combines frecency history, a SQLite index, and
 confined live search for directories, files, Git repositories, and developer
@@ -82,7 +84,7 @@ case "${1:-}" in
         ;;
     esac
     ;;
-  --doctor|--reindex|--watch|use|unuse|roots|add|alias|remove|unalias|aliases|workspace|unwork|workspaces)
+  --doctor|--reindex|--watch|use|unuse|roots|add|alias|remove|unalias|aliases|workspace|unwork|workspaces|gh|vscode|fig)
     _to_cli_run_plugin_command "$@"
     ;;
   --version|-V)

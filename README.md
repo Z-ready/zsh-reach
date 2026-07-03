@@ -12,6 +12,7 @@ to app backend
 to repo nginx
 to cargo tokio
 to code auth
+to gh z-ready/zsh-to
 ```
 
 `to` combines zoxide-style history with developer-focused discovery.
@@ -433,6 +434,33 @@ These commands respect configured roots, excludes, max depth, and symlink
 settings. Successful object jumps update frecency history and the directory
 index, so repeated jumps become history or SQLite hits.
 
+### Developer shortcuts
+
+Jump to local clones for issues and pull requests:
+
+```zsh
+to issue 123
+to pr 456
+```
+
+Open GitHub in your browser:
+
+```zsh
+to gh z-ready/zsh-to
+to gh              # from inside a GitHub-backed repository
+```
+
+Open a matching directory in an external developer tool:
+
+```zsh
+to vscode backend
+to fig backend
+```
+
+`to gh` uses `open`, `xdg-open`, `wslview`, or `explorer.exe` when available.
+Override it with `TO_OPEN_COMMAND`. `to vscode` uses `code` or
+`TO_VSCODE_COMMAND`; `to fig` uses `fig` or `TO_FIG_COMMAND`.
+
 ### Recent destinations
 
 Jump from recent successful destinations:
@@ -491,6 +519,11 @@ to npm react              # jump by package.json metadata
 to py fastapi             # jump by Python project metadata
 to docker nginx           # jump by Docker metadata
 to code auth              # jump by code text under configured roots
+to issue 123              # jump to a local issue clone
+to pr 456                 # jump to a local pull-request clone
+to gh z-ready/zsh-to      # open a GitHub repository
+to vscode backend         # open a matching directory in VS Code
+to fig backend            # run fig for a matching directory
 to recent                 # jump from recent destinations
 to ai docker              # use TO_AI_COMMAND, or broad fallback search
 
@@ -629,6 +662,9 @@ TO_FRECENCY=1
 TO_FRECENCY_THRESHOLD=1
 TO_AI_COMMAND=""
 TO_AI_RANK_COMMAND=""
+TO_OPEN_COMMAND=""
+TO_VSCODE_COMMAND=""
+TO_FIG_COMMAND=""
 TO_HELPER=""
 ```
 
@@ -648,6 +684,9 @@ Options:
 | `TO_FRECENCY_THRESHOLD` | `1` | Minimum history score required before falling back to index/live search |
 | `TO_AI_COMMAND` | empty | External command for `to ai <query...>` |
 | `TO_AI_RANK_COMMAND` | empty | External command that ranks candidates from stdin |
+| `TO_OPEN_COMMAND` | auto | URL opener for `to gh` |
+| `TO_VSCODE_COMMAND` | auto | Directory opener for `to vscode` |
+| `TO_FIG_COMMAND` | auto | Directory command for `to fig` |
 | `TO_HELPER` | auto | Explicit path to `to-helper` |
 
 Persistent state lives under `~/.config/to` by default:
@@ -681,9 +720,11 @@ from its own SQLite/TSV index and falls back to live filesystem search.
 Path handling is quoted and tested with spaces and unicode. SQL queries quote
 user input before passing it to SQLite.
 
-`TO_AI_COMMAND` and `TO_AI_RANK_COMMAND` are explicit escape hatches for users
-who want custom ranking. They are not sandboxed; configure them only with
-commands you would be comfortable running directly in your shell.
+`TO_AI_COMMAND`, `TO_AI_RANK_COMMAND`, `TO_OPEN_COMMAND`,
+`TO_VSCODE_COMMAND`, and `TO_FIG_COMMAND` are explicit escape hatches for users
+who want custom ranking or integrations. They are not sandboxed; configure
+them only with commands you would be comfortable running directly in your
+shell.
 
 ## Performance
 

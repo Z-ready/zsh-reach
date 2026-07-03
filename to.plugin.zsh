@@ -19,10 +19,13 @@ typeset -g TO_AUTO_ADD_ROOTS
 typeset -g TO_ROOT_MODE
 typeset -g TO_FRECENCY
 typeset -g TO_FRECENCY_THRESHOLD
+typeset -g TO_OPEN_COMMAND
+typeset -g TO_VSCODE_COMMAND
+typeset -g TO_FIG_COMMAND
 typeset -g _TO_SQLITE_SCHEMA_READY_FILE
 typeset -g _TO_AUTOWATCH_PID
 typeset -g _TO_AUTOWATCH_PID_FILE
-typeset -r _TO_VERSION="1.4.0"
+typeset -r _TO_VERSION="1.5.0"
 
 _to_apply_positive_int_default() {
   local name="$1"
@@ -102,6 +105,9 @@ _to_apply_config_defaults() {
 : ${TO_RECENT_FILE:="$TO_CONFIG_HOME/recent"}
 : ${TO_AI_COMMAND:=""}
 : ${TO_AI_RANK_COMMAND:=""}
+: ${TO_OPEN_COMMAND:=""}
+: ${TO_VSCODE_COMMAND:=""}
+: ${TO_FIG_COMMAND:=""}
 : ${TO_HELPER:=""}
 : ${TO_MAX_DEPTH:=8}
 : ${TO_INTERACTIVE_THRESHOLD:=3}
@@ -3003,6 +3009,9 @@ _to_doctor() {
   [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]] && print -r -- "  helper: $TO_HELPER" || print -r -- "  helper: no"
   [[ -n "$TO_AI_COMMAND" ]] && print -r -- "  ai command: $TO_AI_COMMAND" || print -r -- "  ai command: no"
   [[ -n "$TO_AI_RANK_COMMAND" ]] && print -r -- "  ai rank command: $TO_AI_RANK_COMMAND" || print -r -- "  ai rank command: no"
+  [[ -n "$TO_OPEN_COMMAND" ]] && print -r -- "  open command: $TO_OPEN_COMMAND" || print -r -- "  open command: auto"
+  [[ -n "$TO_VSCODE_COMMAND" ]] && print -r -- "  vscode command: $TO_VSCODE_COMMAND" || print -r -- "  vscode command: auto"
+  [[ -n "$TO_FIG_COMMAND" ]] && print -r -- "  fig command: $TO_FIG_COMMAND" || print -r -- "  fig command: auto"
 }
 
 _to_add_alias() {
@@ -3184,6 +3193,224 @@ _to_nearest_git_root() {
   return 1
 }
 
+_to_git_remote_url() {
+  local repo="$1"
+  local remote
+
+  [[ -d "$repo" ]] || return 1
+  command git -C "$repo" remote get-url origin 2>/dev/null || return 1
+}
+
+_to_github_url_from_remote() {
+  local remote="$1"
+  local path
+
+  case "$remote" in
+    git@github.com:*)
+      path="${remote#git@github.com:}"
+      ;;
+    ssh://git@github.com/*)
+      path="${remote#ssh://git@github.com/}"
+      ;;
+    ssh://git@ssh.github.com:443/*)
+      path="${remote#ssh://git@ssh.github.com:443/}"
+      ;;
+    https://github.com/*)
+      path="${remote#https://github.com/}"
+      ;;
+    http://github.com/*)
+      path="${remote#http://github.com/}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  path="${path%.git}"
+  [[ "$path" == */* ]] || return 1
+  print -r -- "https://github.com/$path"
+}
+
+_to_system_open_command() {
+  if [[ -n "$TO_OPEN_COMMAND" ]]; then
+    print -r -- "$TO_OPEN_COMMAND"
+  elif command -v open >/dev/null 2>&1; then
+    print -r -- open
+  elif command -v xdg-open >/dev/null 2>&1; then
+    print -r -- xdg-open
+  elif command -v wslview >/dev/null 2>&1; then
+    print -r -- wslview
+  elif command -v explorer.exe >/dev/null 2>&1; then
+    print -r -- explorer.exe
+  else
+    return 1
+  fi
+}
+
+_to_open_url() {
+  local url="$1"
+  local opener
+
+  opener="$(_to_system_open_command)" || {
+    print -u2 -- "to: no browser opener found; open manually: $url"
+    return 1
+  }
+  eval "$opener ${(q)url}" >/dev/null 2>&1
+}
+
+_to_repo_for_gh() {
+  if (( $# > 0 )); then
+    _to_git_repo_matches "$@" | head -n 1
+    return
+  fi
+
+  _to_nearest_git_root
+}
+
+_to_open_github() {
+  local target remote url query
+
+  if (( $# > 0 )) && [[ "$1" == */* && "$1" != */*/* ]]; then
+    url="https://github.com/${1%.git}"
+    _to_open_url "$url"
+    return
+  fi
+
+  target="$(_to_repo_for_gh "$@")" || true
+  if [[ -n "$target" ]]; then
+    remote="$(_to_git_remote_url "$target")" || {
+      print -u2 -- "to: no origin remote for Git repository: $target"
+      return 1
+    }
+    url="$(_to_github_url_from_remote "$remote")" || {
+      print -u2 -- "to: origin is not a GitHub remote: $remote"
+      return 1
+    }
+    _to_open_url "$url"
+    return
+  fi
+
+  query="${(j:-:)@}"
+  [[ -n "$query" ]] || {
+    print -u2 -- "to: usage: to gh <repo> or run inside a GitHub repository"
+    return 2
+  }
+  print -u2 -- "to: no matching GitHub repository: ${(j: :)@}"
+  return 1
+}
+
+_to_issue_pr_clone_matches() {
+  local kind="$1"
+  local id="$2"
+  local -a roots matches ranked seen dirs
+  local root dir name key
+
+  [[ "$id" == <-> ]] || return 1
+  _to_load_roots
+  roots=("${TO_ROOTS[@]}")
+  for root in "${roots[@]}"; do
+    [[ -d "$root" ]] || continue
+    if command -v fd >/dev/null 2>&1; then
+      dirs=("${(@f)$(_to_search_dirs_with_fd "$root")}")
+    else
+      dirs=("${(@f)$(_to_search_dirs_with_find "$root")}")
+    fi
+    for dir in "${dirs[@]}"; do
+      [[ -d "$dir" ]] || continue
+      name="${(L)dir:t}"
+      case "$kind" in
+        issue)
+          [[ "$name" == *issue*"$id"* || "$name" == "#$id" || "$name" == "$id" ]] || continue
+          ;;
+        pr)
+          [[ "$name" == *pr*"$id"* || "$name" == *pull*"$id"* || "$name" == "#$id" || "$name" == "$id" ]] || continue
+          ;;
+        *)
+          continue
+          ;;
+      esac
+      key="${dir:A}"
+      (( ${seen[(Ie)$key]} > 0 )) && continue
+      seen+=("$key")
+      matches+=("$key")
+      _to_index_upsert_dir "$key"
+    done
+  done
+
+  (( ${#matches} > 0 )) || return 1
+  _to_record_search_outcome "Shortcut Filesystem Fallback"
+  ranked=("${(@f)$(_to_rank_dirs_by_usage "${matches[@]}")}")
+  printf '%s\n' "${ranked[@]}"
+}
+
+_to_jump_issue_pr_clone() {
+  local kind="$1"
+  local id="$2"
+  local target
+
+  [[ -n "$id" ]] || {
+    print -u2 -- "to: usage: to $kind <id>"
+    return 2
+  }
+  target="$(_to_choose_match 0 "${(@f)$(_to_issue_pr_clone_matches "$kind" "$id")}")"
+  if [[ $? -ne 0 || -z "$target" ]]; then
+    _to_record_search_outcome "Miss"
+    print -u2 -- "to: no local $kind clone matching $id"
+    print -u2 -- "to: searched $(_to_discovery_mode_label) roots: $(_to_roots_summary)"
+    return 1
+  fi
+  cd "$target" && _to_after_cd "$PWD"
+}
+
+_to_resolve_for_external_tool() {
+  local -a matches roots
+
+  if (( $# == 0 )); then
+    print -r -- "${PWD:A}"
+    return
+  fi
+
+  _to_load_roots
+  roots=("${TO_ROOTS[@]}")
+  matches=("${(@f)$(_to_collect_matches roots "$@")}")
+  matches=("${(@)matches:#}")
+  (( ${#matches} > 0 )) || return 1
+  _to_choose_match 0 "${matches[@]}"
+}
+
+_to_run_external_dir_command() {
+  local label="$1"
+  local command_value="$2"
+  shift 2
+  local dir
+
+  [[ -n "$command_value" ]] || {
+    print -u2 -- "to: $label command is not configured or installed"
+    return 1
+  }
+  dir="$(_to_resolve_for_external_tool "$@")" || {
+    _to_record_search_outcome "Miss"
+    _to_print_no_match_advice "$label target" "$@"
+    return 1
+  }
+  eval "$command_value ${(q)dir}" >/dev/null 2>&1
+}
+
+_to_vscode_command() {
+  [[ -n "$TO_VSCODE_COMMAND" ]] && {
+    print -r -- "$TO_VSCODE_COMMAND"
+    return
+  }
+  command -v code >/dev/null 2>&1 && print -r -- code
+}
+
+_to_fig_command() {
+  [[ -n "$TO_FIG_COMMAND" ]] && {
+    print -r -- "$TO_FIG_COMMAND"
+    return
+  }
+  command -v fig >/dev/null 2>&1 && print -r -- fig
+}
+
 _to_ai_matches() {
   local query="${(j: :)@}"
   local -a roots
@@ -3224,6 +3451,11 @@ Usage:
   to py <query...>          Jump to a Python project by package metadata
   to docker <query...>      Jump to a Docker project by Docker metadata
   to code <query...>        Jump to a directory containing matching code text
+  to issue <id>             Jump to a local issue clone directory
+  to pr <id>                Jump to a local pull-request clone directory
+  to gh [repo]              Open a GitHub repository in the browser
+  to vscode [query...]      Open a matching directory in VS Code
+  to fig [query...]         Run fig for a matching directory
   to recent                 Choose from recent jumps
   to workspace <name> <dir> Add a workspace alias
   to work <name>            Jump to a workspace
@@ -3250,6 +3482,9 @@ Config:
   TO_FRECENCY_THRESHOLD=1      Minimum frecency score before fallback search
   TO_AI_COMMAND               External command that prints candidate dirs
   TO_AI_RANK_COMMAND          External command that ranks candidate dirs from stdin
+  TO_OPEN_COMMAND             External URL opener for to gh
+  TO_VSCODE_COMMAND           External command for to vscode
+  TO_FIG_COMMAND              External command for to fig
   TO_HELPER                   Optional to-helper binary path
 EOF
 }
@@ -3305,6 +3540,23 @@ to() {
       local object_kind="$1"
       shift
       _to_jump_to_object "$object_kind" "$@"
+      ;;
+    issue|pr)
+      local shortcut_kind="$1"
+      shift
+      _to_jump_issue_pr_clone "$shortcut_kind" "$1"
+      ;;
+    gh)
+      shift
+      _to_open_github "$@"
+      ;;
+    vscode)
+      shift
+      _to_run_external_dir_command "vscode" "$(_to_vscode_command)" "$@"
+      ;;
+    fig)
+      shift
+      _to_run_external_dir_command "fig" "$(_to_fig_command)" "$@"
       ;;
     recent)
       target="$(_to_choose_match 0 "${(@f)$(_to_recent_dirs)}")"
