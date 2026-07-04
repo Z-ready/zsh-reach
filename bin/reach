@@ -1,0 +1,99 @@
+#!/usr/bin/env zsh
+
+set -u
+
+typeset -g _REACH_CLI_SCRIPT_PATH="${0:A}"
+
+_reach_cli_usage() {
+  cat <<'EOF'
+Usage:
+  reach init zsh     Print zsh integration script
+  reach --doctor     Check dependencies and config
+  reach --reindex    Rebuild the directory index
+  reach --version    Show version
+  reach --help       Show this help
+
+After initialization, the zsh function named `gt` handles directory jumps:
+
+  eval "$(reach init zsh)"
+  gt use ~/Projects
+  gt backend
+  gt README.md
+  gt repo ai template
+
+If you prefer the old command name, add `alias to=gt` after initialization.
+EOF
+}
+
+_reach_cli_plugin_path() {
+  local script_dir prefix
+
+  script_dir="${_REACH_CLI_SCRIPT_PATH:h}"
+  prefix="${script_dir:h}"
+
+  if [[ -r "$prefix/share/reach/to.plugin.zsh" ]]; then
+    print -r -- "$prefix/share/reach/to.plugin.zsh"
+    return 0
+  fi
+
+  if [[ -r "$prefix/share/to/to.plugin.zsh" ]]; then
+    print -r -- "$prefix/share/to/to.plugin.zsh"
+    return 0
+  fi
+
+  if [[ -r "${_REACH_CLI_SCRIPT_PATH:h:h}/to.plugin.zsh" ]]; then
+    print -r -- "${_REACH_CLI_SCRIPT_PATH:h:h}/to.plugin.zsh"
+    return 0
+  fi
+
+  if [[ -r "./to.plugin.zsh" ]]; then
+    print -r -- "${PWD:A}/to.plugin.zsh"
+    return 0
+  fi
+
+  return 1
+}
+
+_reach_cli_run_plugin_command() {
+  local plugin_path
+
+  plugin_path="$(_reach_cli_plugin_path)" || {
+    print -u2 -- "reach: could not locate to.plugin.zsh"
+    exit 1
+  }
+  source "$plugin_path"
+  gt "$@"
+}
+
+case "${1:-}" in
+  init)
+    case "${2:-}" in
+      zsh|"")
+        plugin_path="$(_reach_cli_plugin_path)" || {
+          print -u2 -- "reach: could not locate to.plugin.zsh"
+          exit 1
+        }
+        printf 'source %q\n' "$plugin_path"
+        ;;
+      *)
+        print -u2 -- "reach: unsupported shell: $2"
+        print -u2 -- "reach: currently supported: zsh"
+        exit 2
+        ;;
+    esac
+    ;;
+  --doctor|--reindex|--watch|use|unuse|roots|add|alias|remove|unalias|aliases|workspace|unwork|workspaces|gh|vscode|fig)
+    _reach_cli_run_plugin_command "$@"
+    ;;
+  --version|-V)
+    _reach_cli_run_plugin_command "$@"
+    ;;
+  --help|-h|help|"")
+    _reach_cli_usage
+    ;;
+  *)
+    print -u2 -- "reach: shell integration is not loaded"
+    print -u2 -- 'reach: add this to ~/.zshrc: eval "$(reach init zsh)"'
+    exit 2
+    ;;
+esac

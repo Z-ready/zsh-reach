@@ -38,6 +38,7 @@ CONFIG="$ROOT/config"
 HOME_DIR="$ROOT/home"
 SEARCH_ROOT="$ROOT/search"
 TEST_DIR="${0:A:h}"
+export TO_HELPER="$TEST_DIR/../target/release/reach-helper"
 
 mkdir -p \
   "$CONFIG" \
@@ -141,7 +142,8 @@ assert_eq "$TO_AUTOWATCH" "0" "invalid config autowatch falls back to default"
 assert_eq "$TO_AUTO_ADD_ROOTS" "0" "invalid config auto add roots falls back to default"
 assert_eq "$TO_FRECENCY" "1" "invalid config frecency falls back to default"
 assert_eq "$TO_FRECENCY_THRESHOLD" "1" "invalid config frecency threshold falls back to default"
-assert_eq "$(to --version)" "to 1.5.0" "plugin version output"
+assert_eq "$(gt --version)" "reach 1.6.0" "default gt version output"
+assert_eq "$(to --version)" "reach 1.6.0" "legacy to version output"
 assert_eq "$(to roots)" "${HOME_DIR:A}" "source ignores stale in-shell roots"
 assert_eq "$TO_WATCH_DEBOUNCE" "2" "watch debounce default"
 assert_eq "$TO_AI_RANK_COMMAND" "" "ai rank command default"
@@ -200,6 +202,37 @@ OLD_PATH="$PATH"
 PATH="$STAT_BIN:$PATH"
 assert_eq "$(_to_root_mtime "$SEARCH_ROOT")" "1234567890" "linux stat mount output falls back to mtime"
 PATH="$OLD_PATH"
+
+DATE_FAIL_BIN="$ROOT/date-fail-bin"
+mkdir -p "$DATE_FAIL_BIN"
+cat > "$DATE_FAIL_BIN/date" <<'EOF'
+#!/usr/bin/env zsh
+exit 1
+EOF
+chmod +x "$DATE_FAIL_BIN/date"
+OLD_PATH="$PATH"
+PATH="$DATE_FAIL_BIN:$PATH"
+if _to_now >/dev/null 2>&1; then
+  fail "_to_now should fail when date fails"
+fi
+TIME_FAIL_CONFIG="$ROOT/time-failure-config"
+TIME_FAIL_HOME="$ROOT/time-failure-home"
+mkdir -p "$TIME_FAIL_CONFIG" "$TIME_FAIL_HOME/no-frecency"
+time_failure_frecency="$(
+  HOME="$TIME_FAIL_HOME" \
+  TO_CONFIG_HOME="$TIME_FAIL_CONFIG" \
+  TO_HELPER="$TO_HELPER" \
+  PATH="$DATE_FAIL_BIN:$OLD_PATH" \
+  zsh -fc '
+    source "$1"
+    _to_index_ensure_sqlite_schema >/dev/null || exit 1
+    _to_record_frecency "$HOME/no-frecency"
+    "$TO_HELPER" frecency-query --db "$TO_INDEX_FILE" --threshold 0 --now 999999 -- no-frecency 2>/dev/null
+  ' zsh "$TEST_DIR/../to.plugin.zsh"
+)"
+assert_eq "$time_failure_frecency" "" "time failure skips frecency write"
+PATH="$OLD_PATH"
+ok "_to_now reports failure instead of epoch zero"
 
 if to -r "$ROOT/empty-root" no-state-match >/dev/null 2>&1; then
   fail "empty root should not resolve missing directory"
@@ -681,73 +714,7 @@ ${HOME_DIR:A}" "auto add roots persists parent root"
 TO_AUTO_ADD_ROOTS=0
 to unuse "$ROOT/auto-parent" >/dev/null
 
-WATCH_BIN="$ROOT/watch-bin"
-mkdir -p "$WATCH_BIN"
-cat > "$WATCH_BIN/fswatch" <<'EOF'
-#!/usr/bin/env zsh
-exit 0
-EOF
-chmod +x "$WATCH_BIN/fswatch"
-OLD_PATH="$PATH"
-PATH="$WATCH_BIN:$PATH"
-assert_eq "$(_to_watch_backend)" "fswatch" "watcher detects fswatch"
-PATH="$OLD_PATH"
-
-if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
-  WATCH_ROOT="$ROOT/watch-root"
-  WATCH_STATE="$ROOT/watch-state"
-  mkdir -p "$WATCH_ROOT/watched-created"
-  to use "$WATCH_ROOT" >/dev/null
-  sleep 1
-  touch "$WATCH_ROOT"
-  cat > "$WATCH_BIN/fswatch" <<'EOF'
-#!/usr/bin/env zsh
-if [[ ! -e "$TO_FAKE_WATCH_STATE" ]]; then
-  : > "$TO_FAKE_WATCH_STATE"
-  exit 0
-fi
-exit 1
-EOF
-  chmod +x "$WATCH_BIN/fswatch"
-  OLD_PATH="$PATH"
-  PATH="$WATCH_BIN:$PATH"
-  export TO_FAKE_WATCH_STATE="$WATCH_STATE"
-  _to_watch >/dev/null 2>&1
-  PATH="$OLD_PATH"
-  watched_match="$(_to_index_query exact watched-created)"
-  assert_path_eq "$watched_match" "$WATCH_ROOT/watched-created" "watcher reindex adds new directories"
-  to unuse "$WATCH_ROOT" >/dev/null
-fi
-
-if command -v sqlite3 >/dev/null 2>&1; then
-  AUTOWATCH_ROOT="$ROOT/autowatch"
-  AUTOWATCH_BIN="$AUTOWATCH_ROOT/bin"
-  mkdir -p "$AUTOWATCH_ROOT/home/autowatched-created" "$AUTOWATCH_ROOT/config" "$AUTOWATCH_BIN"
-  cat > "$AUTOWATCH_BIN/fswatch" <<'EOF'
-#!/usr/bin/env zsh
-if [[ ! -e "$TO_FAKE_AUTOWATCH_STATE" ]]; then
-  : > "$TO_FAKE_AUTOWATCH_STATE"
-  exit 0
-fi
-exit 1
-EOF
-  chmod +x "$AUTOWATCH_BIN/fswatch"
-  TO_AUTOWATCH_RESULT="$(
-    HOME="$AUTOWATCH_ROOT/home" \
-    TO_CONFIG_HOME="$AUTOWATCH_ROOT/config" \
-    TO_AUTOWATCH=1 \
-    TO_WATCH_DEBOUNCE=0 \
-    TO_FAKE_AUTOWATCH_STATE="$AUTOWATCH_ROOT/state" \
-    PATH="$AUTOWATCH_BIN:$PATH" \
-    zsh -fc '
-      source "$1"
-      [[ -n "$_TO_AUTOWATCH_PID" ]] || exit 1
-      wait "$_TO_AUTOWATCH_PID"
-      _to_index_query exact autowatched-created
-    ' zsh "$TEST_DIR/../to.plugin.zsh"
-  )"
-  assert_path_eq "$TO_AUTOWATCH_RESULT" "$AUTOWATCH_ROOT/home/autowatched-created" "autowatch starts on source and reindexes"
-fi
+assert_eq "$(_to_watch_backend)" "notify" "watcher uses helper notify backend"
 
 doctor_output="$(to --doctor)"
 [[ "$doctor_output" == *"to config: $CONFIG/config.zsh"* ]] || fail "doctor config path"
@@ -784,10 +751,16 @@ bin_doctor_output="$("$TEST_DIR/../bin/to" --doctor)"
 [[ "$bin_doctor_output" == *"max depth: 8"* ]] || fail "bin wrapper doctor config defaults"
 ok "bin wrapper runs doctor before shell integration"
 
-assert_eq "$("$TEST_DIR/../bin/to" --version)" "to 1.5.0" "bin wrapper version output"
+assert_eq "$("$TEST_DIR/../bin/to" --version)" "reach 1.6.0" "bin wrapper version output"
 
 bin_roots_output="$("$TEST_DIR/../bin/to" roots)"
 assert_eq "$bin_roots_output" "${HOME_DIR:A}" "bin wrapper runs roots before shell integration"
+
+bin_reach_version="$("$TEST_DIR/../bin/reach" --version)"
+assert_eq "$bin_reach_version" "reach 1.6.0" "reach wrapper version output"
+bin_reach_init="$("$TEST_DIR/../bin/reach" init zsh)"
+[[ "$bin_reach_init" == source*to.plugin.zsh* ]] || fail "reach wrapper init did not print plugin source command: $bin_reach_init"
+ok "reach wrapper init output"
 
 READONLY_CONFIG="$ROOT/readonly-config"
 READONLY_HOME="$ROOT/readonly-home"

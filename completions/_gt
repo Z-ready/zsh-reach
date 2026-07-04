@@ -1,0 +1,55 @@
+#compdef gt reach
+
+_gt() {
+  local -a commands
+
+  commands=(
+    'use:add a search root'
+    'unuse:remove a search root'
+    'roots:list search roots'
+    'add:add a user alias'
+    'remove:remove a user alias'
+    'aliases:list user aliases'
+    'repo:list or jump to a matching Git repository'
+    'git:jump to the nearest parent Git repository'
+    'file:jump to a directory containing a matching file'
+    'dir:jump to a matching directory'
+    'ws:jump to a matching workspace'
+    'cargo:jump by Cargo.toml metadata'
+    'npm:jump by package.json metadata'
+    'py:jump by Python project metadata'
+    'docker:jump by Docker metadata'
+    'code:jump by code text'
+    'issue:jump to a local issue clone directory'
+    'pr:jump to a local pull-request clone directory'
+    'gh:open a GitHub repository'
+    'vscode:open a matching directory in VS Code'
+    'fig:run fig for a matching directory'
+    'recent:choose from recent jumps'
+    'workspace:add a workspace'
+    'work:jump to a workspace'
+    'unwork:remove a workspace'
+    'workspaces:list workspaces'
+    'ai:use configured AI search'
+    '--reindex:rebuild the directory index'
+    '--watch:watch roots and reindex after filesystem changes'
+    '--doctor:check dependencies and config'
+    '--version:show version'
+    'init:print shell integration script'
+    '-i:force interactive selection'
+    '-r:search from a temporary root'
+    '--from:search from a temporary root'
+  )
+
+  _arguments \
+    '1:command or query:->cmds' \
+    '*:query:_files -/' && return
+
+  case "$state" in
+    cmds)
+      _describe -t commands 'gt command' commands
+      ;;
+  esac
+}
+
+_gt "$@"

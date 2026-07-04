@@ -1,4 +1,4 @@
-# to: exploratory directory jumper for zsh.
+# reach: fast directory and object jumper for zsh. Default command: gt.
 
 : ${TO_WATCH_DEBOUNCE:=2}
 : ${TO_AUTOWATCH:=0}
@@ -22,10 +22,15 @@ typeset -g TO_FRECENCY_THRESHOLD
 typeset -g TO_OPEN_COMMAND
 typeset -g TO_VSCODE_COMMAND
 typeset -g TO_FIG_COMMAND
+typeset -g TO_REACHIGNORE
+typeset -g TO_USE_GITIGNORE
+typeset -g TO_SHOW_DEEP_SCAN_PROMPT
 typeset -g _TO_SQLITE_SCHEMA_READY_FILE
 typeset -g _TO_AUTOWATCH_PID
 typeset -g _TO_AUTOWATCH_PID_FILE
-typeset -r _TO_VERSION="1.5.0"
+if (( ! $+_TO_VERSION )); then
+  typeset -gr _TO_VERSION="1.6.0"
+fi
 
 _to_apply_positive_int_default() {
   local name="$1"
@@ -90,12 +95,14 @@ _to_apply_config_defaults() {
   _to_apply_bool_default TO_AUTOWATCH 0
   _to_apply_bool_default TO_AUTO_ADD_ROOTS 0
   _to_apply_bool_default TO_FRECENCY 1
+  _to_apply_bool_default TO_USE_GITIGNORE 1
+  _to_apply_bool_default TO_SHOW_DEEP_SCAN_PROMPT 1
   _to_apply_nonnegative_number_default TO_FRECENCY_THRESHOLD 1
   _to_apply_nonnegative_int_default TO_WATCH_DEBOUNCE 2
   _to_apply_root_mode_default
 }
 
-: ${TO_CONFIG_HOME:="${XDG_CONFIG_HOME:-$HOME/.config}/to"}
+: ${TO_CONFIG_HOME:="${REACH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/reach}"}
 : ${TO_CONFIG_FILE:="$TO_CONFIG_HOME/config.zsh"}
 : ${TO_ROOTS_FILE:="$TO_CONFIG_HOME/roots"}
 : ${TO_INDEX_FILE:="$TO_CONFIG_HOME/index.sqlite3"}
@@ -109,6 +116,7 @@ _to_apply_config_defaults() {
 : ${TO_VSCODE_COMMAND:=""}
 : ${TO_FIG_COMMAND:=""}
 : ${TO_HELPER:=""}
+: ${TO_REACHIGNORE:="${REACH_IGNORE_FILE:-$HOME/.reachignore}"}
 : ${TO_MAX_DEPTH:=8}
 : ${TO_INTERACTIVE_THRESHOLD:=3}
 : ${TO_SEARCH_PATH_FRAGMENTS:=0}
@@ -119,6 +127,8 @@ _to_apply_config_defaults() {
 : ${TO_ROOT_MODE:=home}
 : ${TO_FRECENCY:=1}
 : ${TO_FRECENCY_THRESHOLD:=1}
+: ${TO_USE_GITIGNORE:=1}
+: ${TO_SHOW_DEEP_SCAN_PROMPT:=1}
 _TO_AUTOWATCH_PID_FILE="$TO_CONFIG_HOME/watch.pid"
 
 TO_ROOTS=()
@@ -139,8 +149,8 @@ if [[ -r "$TO_CONFIG_FILE" ]]; then
 fi
 _to_apply_config_defaults
 
-if [[ -z "$TO_HELPER" ]] && command -v to-helper >/dev/null 2>&1; then
-  TO_HELPER="$(command -v to-helper)"
+if [[ -z "$TO_HELPER" ]] && command -v reach-helper >/dev/null 2>&1; then
+  TO_HELPER="$(command -v reach-helper)"
 fi
 
 _to_expand_path() {
@@ -220,7 +230,17 @@ _to_sql_quote() {
 }
 
 _to_now() {
-  date +%s 2>/dev/null || print -r -- 0
+  local now
+
+  now="$(date +%s 2>/dev/null)" || {
+    print -u2 -- "reach: warning: could not read epoch time; skipping timestamped database update"
+    return 1
+  }
+  [[ "$now" == <-> ]] || {
+    print -u2 -- "reach: warning: invalid epoch time from date: $now"
+    return 1
+  }
+  print -r -- "$now"
 }
 
 _to_dir_depth() {
@@ -396,6 +416,14 @@ _to_index_collect_tokens_tsv() {
 
 _to_index_ensure_sqlite_schema() {
   local has_id has_parent has_depth has_last_seen has_last_used has_hit_count has_repo has_repo_name has_token_dir_id has_token_path has_config_key has_files has_history has_stats
+
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    mkdir -p "$TO_CONFIG_HOME" || return 1
+    "$TO_HELPER" init-db --db "$TO_INDEX_FILE" >/dev/null 2>/dev/null && {
+      _TO_SQLITE_SCHEMA_READY_FILE="$TO_INDEX_FILE"
+      return 0
+    }
+  fi
 
   command -v sqlite3 >/dev/null 2>&1 || return 1
   if [[ "$_TO_SQLITE_SCHEMA_READY_FILE" == "$TO_INDEX_FILE" && -r "$TO_INDEX_FILE" ]]; then
@@ -743,9 +771,14 @@ _to_record_recent() {
 
   [[ -d "$dir" ]] || return 0
   mkdir -p "$TO_CONFIG_HOME" || return 0
-  now="$(date +%s 2>/dev/null || print -r -- 0)"
+  now="$(_to_now)" || return 0
 
-  if command -v sqlite3 >/dev/null 2>&1; then
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    _to_index_ensure_sqlite_schema >/dev/null 2>&1 \
+      && "$TO_HELPER" record-recent --db "$TO_INDEX_FILE" --path "$dir" --now "$now" >/dev/null 2>/dev/null
+  fi
+
+  if [[ -z "$TO_HELPER" ]] && command -v sqlite3 >/dev/null 2>&1; then
     _to_index_ensure_sqlite_schema >/dev/null 2>&1
     sqlite3 "$TO_INDEX_FILE" >/dev/null 2>/dev/null <<SQL
 insert or replace into recent(path, last_used)
@@ -774,6 +807,17 @@ SQL
 _to_recent_dirs() {
   local line dir
   local -a sqlite_recent
+
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" && -r "$TO_INDEX_FILE" ]]; then
+    _to_index_ensure_sqlite_schema >/dev/null 2>&1
+    sqlite_recent=("${(@f)$("$TO_HELPER" recent --db "$TO_INDEX_FILE" 2>/dev/null)}")
+    if (( ${#sqlite_recent} > 0 )); then
+      for dir in "${sqlite_recent[@]}"; do
+        [[ -d "$dir" ]] && print -r -- "${dir:A}"
+      done
+      return 0
+    fi
+  fi
 
   if command -v sqlite3 >/dev/null 2>&1; then
     _to_index_ensure_sqlite_schema >/dev/null 2>&1
@@ -806,9 +850,14 @@ _to_record_frecency() {
 
   (( TO_FRECENCY == 1 )) || return 0
   [[ -d "$dir" ]] || return 0
-  command -v sqlite3 >/dev/null 2>&1 || return 0
   _to_index_ensure_sqlite_schema >/dev/null 2>&1 || return 0
-  now="$(_to_now)"
+  now="$(_to_now)" || return 0
+
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    "$TO_HELPER" record-frecency --db "$TO_INDEX_FILE" --path "$dir" --threshold "$TO_FRECENCY_THRESHOLD" --now "$now" >/dev/null 2>/dev/null
+    return 0
+  fi
+  command -v sqlite3 >/dev/null 2>&1 || return 0
 
   sqlite3 "$TO_INDEX_FILE" >/dev/null 2>/dev/null <<SQL
 insert into history(path, visits, last_used)
@@ -829,16 +878,24 @@ _to_stat_set() {
   local key="$1"
   local value="$2"
 
-  command -v sqlite3 >/dev/null 2>&1 || return 0
   _to_index_ensure_sqlite_schema >/dev/null 2>&1 || return 0
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    "$TO_HELPER" stat-set --db "$TO_INDEX_FILE" --key "$key" --value "$value" >/dev/null 2>/dev/null
+    return 0
+  fi
+  command -v sqlite3 >/dev/null 2>&1 || return 0
   sqlite3 "$TO_INDEX_FILE" "insert or replace into stats(key, value) values($(_to_sql_quote "$key"), $(_to_sql_quote "$value"));" >/dev/null 2>/dev/null
 }
 
 _to_stat_increment() {
   local key="$1"
 
-  command -v sqlite3 >/dev/null 2>&1 || return 0
   _to_index_ensure_sqlite_schema >/dev/null 2>&1 || return 0
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    "$TO_HELPER" stat-inc --db "$TO_INDEX_FILE" --key "$key" >/dev/null 2>/dev/null
+    return 0
+  fi
+  command -v sqlite3 >/dev/null 2>&1 || return 0
   sqlite3 "$TO_INDEX_FILE" "insert into stats(key, value) values($(_to_sql_quote "$key"), '1') on conflict(key) do update set value = cast(stats.value as integer) + 1;" >/dev/null 2>/dev/null
 }
 
@@ -860,6 +917,11 @@ _to_stat_get() {
   local fallback="${2:-0}"
   local value
 
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" && -r "$TO_INDEX_FILE" ]]; then
+    value="$("$TO_HELPER" stat-get --db "$TO_INDEX_FILE" --key "$key" --fallback "$fallback" 2>/dev/null)"
+    [[ -n "$value" ]] && print -r -- "$value" || print -r -- "$fallback"
+    return
+  fi
   command -v sqlite3 >/dev/null 2>&1 || {
     print -r -- "$fallback"
     return
@@ -913,7 +975,6 @@ _to_frecency_query_sqlite() {
   local query first now score_sql where sql threshold
 
   (( TO_FRECENCY == 1 )) || return 1
-  command -v sqlite3 >/dev/null 2>&1 || return 1
   [[ -r "$TO_INDEX_FILE" ]] || return 1
   _to_index_ensure_sqlite_schema || return 1
   queries=("${(@L)@}")
@@ -923,7 +984,13 @@ _to_frecency_query_sqlite() {
   fi
 
   first="${queries[1]}"
-  now="$(_to_now)"
+  now="$(_to_now)" || return 1
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    "$TO_HELPER" frecency-query --db "$TO_INDEX_FILE" --threshold "$TO_FRECENCY_THRESHOLD" --now "$now" -- "${queries[@]}" 2>/dev/null \
+      | _to_frecency_filter_roots "$roots_ref"
+    return
+  fi
+  command -v sqlite3 >/dev/null 2>&1 || return 1
   score_sql="$(_to_frecency_score_sql "$now")"
   threshold="$TO_FRECENCY_THRESHOLD"
   if (( ${#queries} == 1 )) && [[ "$queries[1]" != */* ]] && (( TO_SEARCH_PATH_FRAGMENTS == 0 )); then
@@ -959,7 +1026,15 @@ _to_frecency_fields() {
     print -r -- "0	0	0"
     return
   }
-  now="$(_to_now)"
+  now="$(_to_now)" || {
+    print -r -- "0	0	0"
+    return
+  }
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    fields="$("$TO_HELPER" frecency-fields --db "$TO_INDEX_FILE" --path "$dir" --now "$now" 2>/dev/null)"
+    [[ -n "$fields" ]] && print -r -- "$fields" || print -r -- "0	0	0"
+    return
+  fi
   score_sql="$(_to_frecency_score_sql "$now")"
   fields="$(sqlite3 -noheader "$TO_INDEX_FILE" "select printf('%.6f', $score_sql) || char(9) || last_used || char(9) || visits from history where path = $(_to_sql_quote "$dir");" 2>/dev/null)"
   [[ -n "$fields" ]] && print -r -- "$fields" || print -r -- "0	0	0"
@@ -1044,12 +1119,18 @@ _to_search_exact_name() {
   local root="$1"
   local query="$2"
   local limit="${3:-}"
+  local -a matches
 
-  if command -v fd >/dev/null 2>&1; then
-    _to_search_exact_name_with_fd "$root" "$query" "$limit"
-  else
-    _to_search_exact_name_with_find "$root" "$query" "$limit"
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    matches=("${(@f)$(_to_helper_scan_single_root "$root" dir exact 1 "$query")}")
+    if [[ -n "$limit" ]]; then
+      printf '%s\n' "${matches[@]:0:$limit}"
+    else
+      printf '%s\n' "${matches[@]}"
+    fi
+    return
   fi
+  _to_search_exact_name_with_find "$root" "$query" "$limit"
 }
 
 _to_search_exact_file_with_fd() {
@@ -1099,11 +1180,51 @@ _to_search_exact_file() {
   local root="$1"
   local query="$2"
 
-  if command -v fd >/dev/null 2>&1; then
-    _to_search_exact_file_with_fd "$root" "$query"
-  else
-    _to_search_exact_file_with_find "$root" "$query"
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    _to_helper_scan_single_root "$root" file exact 1 "$query"
+    return
   fi
+  _to_search_exact_file_with_find "$root" "$query"
+}
+
+_to_helper_scan_single_root() {
+  local root="$1"
+  local kind="$2"
+  local mode="$3"
+  local deep="${4:-0}"
+  shift 4
+  local -a args
+
+  [[ -n "$TO_HELPER" && -x "$TO_HELPER" && -d "$root" ]] || return 1
+  args=(scan --kind "$kind" --mode "$mode" --root "${root:A}" --max-depth "$TO_MAX_DEPTH" --reachignore "$TO_REACHIGNORE")
+  (( TO_FOLLOW_SYMLINKS == 1 )) && args+=(--follow-links)
+  (( TO_USE_GITIGNORE == 0 )) && args+=(--no-gitignore)
+  (( deep == 1 )) && args+=(--deep-fallback)
+  (( TO_SHOW_DEEP_SCAN_PROMPT == 0 )) && args+=(--no-deep-prompt)
+  "$TO_HELPER" "${args[@]}" -- "$@" 2>/dev/null
+}
+
+_to_helper_scan_roots_ref() {
+  local roots_ref="$1"
+  local kind="$2"
+  local mode="$3"
+  local deep="${4:-0}"
+  shift 4
+  local -a roots args
+  local root
+
+  [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]] || return 1
+  eval "roots=(\"\${${roots_ref}[@]}\")"
+  args=(scan --kind "$kind" --mode "$mode" --max-depth "$TO_MAX_DEPTH" --reachignore "$TO_REACHIGNORE")
+  for root in "${roots[@]}"; do
+    [[ -d "$root" ]] && args+=(--root "${root:A}")
+  done
+  (( ${#args[(I)--root]} > 0 )) || return 1
+  (( TO_FOLLOW_SYMLINKS == 1 )) && args+=(--follow-links)
+  (( TO_USE_GITIGNORE == 0 )) && args+=(--no-gitignore)
+  (( deep == 1 )) && args+=(--deep-fallback)
+  (( TO_SHOW_DEEP_SCAN_PROMPT == 0 )) && args+=(--no-deep-prompt)
+  "$TO_HELPER" "${args[@]}" -- "$@" 2>/dev/null
 }
 
 _to_file_matches_query() {
@@ -1124,10 +1245,11 @@ _to_file_matches_query() {
 _to_index_collect_root_tsv() {
   local root="${1:A}"
   local output_file="$2"
-  local now="${3:-$(_to_now)}"
+  local now="${3:-}"
   local dir
 
   [[ -d "$root" ]] || return 1
+  [[ -n "$now" ]] || now="$(_to_now)" || return 1
   : > "$output_file" || return 1
   print -u2 -- "to: indexing $root"
   if command -v fd >/dev/null 2>&1; then
@@ -1171,7 +1293,7 @@ _to_index_collect_tsv() {
   mkdir -p "$TO_CONFIG_HOME" || return 1
   tmpfile="$output_file.tmp.$$"
   : > "$tmpfile" || return 1
-  now="$(_to_now)"
+  now="$(_to_now)" || return 1
 
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
@@ -1452,7 +1574,10 @@ _to_index_reindex_incremental_sqlite() {
   _to_index_ensure_sqlite_schema || return 1
   _to_load_roots
   roots=("${TO_ROOTS[@]}")
-  now="$(_to_now)"
+  now="$(_to_now)" || {
+    print -r -- "unknown"
+    return
+  }
   config_key="$(_to_index_config_key)"
 
   for root in "${roots[@]}"; do
@@ -1478,6 +1603,36 @@ _to_index_rebuild_tsv() {
 }
 
 _to_reindex() {
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    local -a roots args
+    local root now root_mtime config_key fresh changed=0 skipped=0
+
+    mkdir -p "$TO_CONFIG_HOME" || return 1
+    _to_load_roots
+    roots=("${TO_ROOTS[@]}")
+    now="$(_to_now)" || return 1
+    config_key="$(_to_index_config_key)"
+    for root in "${roots[@]}"; do
+      [[ -d "$root" ]] || continue
+      root="${root:A}"
+      root_mtime="$(_to_root_mtime "$root")"
+      fresh="$("$TO_HELPER" root-fresh --db "$TO_INDEX_FILE" --root "$root" --mtime "$root_mtime" --config-key "$config_key" 2>/dev/null)"
+      if [[ "$fresh" == 1 ]]; then
+        print -u2 -- "to: index fresh $root"
+        (( ++skipped ))
+        continue
+      fi
+      args=(index-root --db "$TO_INDEX_FILE" --root "$root" --now "$now" --mtime "$root_mtime" --config-key "$config_key" --max-depth "$TO_MAX_DEPTH" --reachignore "$TO_REACHIGNORE")
+      (( TO_FOLLOW_SYMLINKS == 1 )) && args+=(--follow-links)
+      (( TO_USE_GITIGNORE == 0 )) && args+=(--no-gitignore)
+      "$TO_HELPER" "${args[@]}" || return 1
+      (( ++changed ))
+    done
+    _to_stat_set last_reindex "$now"
+    print -r -- "to: indexed $changed root(s), skipped $skipped fresh root(s) into $TO_INDEX_FILE"
+    return
+  fi
+
   if command -v sqlite3 >/dev/null 2>&1; then
     _to_index_reindex_incremental_sqlite || return 1
   else
@@ -1601,9 +1756,13 @@ _to_index_delete_path() {
   local target_path="${1:A}"
   local tmp line item
 
-  if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
+  if [[ -r "$TO_INDEX_FILE" ]] && { [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]] || command -v sqlite3 >/dev/null 2>&1; }; then
     _to_index_ensure_sqlite_schema || return 0
-    sqlite3 "$TO_INDEX_FILE" "delete from tokens where dir_id in (select id from dirs where path = $(_to_sql_quote "$target_path")); delete from dirs where path = $(_to_sql_quote "$target_path");" >/dev/null 2>/dev/null
+    if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+      "$TO_HELPER" delete-path --db "$TO_INDEX_FILE" --path "$target_path" >/dev/null 2>/dev/null
+    else
+      sqlite3 "$TO_INDEX_FILE" "delete from tokens where dir_id in (select id from dirs where path = $(_to_sql_quote "$target_path")); delete from dirs where path = $(_to_sql_quote "$target_path");" >/dev/null 2>/dev/null
+    fi
     return 0
   fi
 
@@ -1621,9 +1780,13 @@ _to_index_delete_path() {
 _to_index_delete_file_path() {
   local target_path="${1:A}"
 
-  if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
+  if [[ -r "$TO_INDEX_FILE" ]] && { [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]] || command -v sqlite3 >/dev/null 2>&1; }; then
     _to_index_ensure_sqlite_schema || return 0
-    sqlite3 "$TO_INDEX_FILE" "delete from files where path = $(_to_sql_quote "$target_path");" >/dev/null 2>/dev/null
+    if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+      "$TO_HELPER" delete-file --db "$TO_INDEX_FILE" --path "$target_path" >/dev/null 2>/dev/null
+    else
+      sqlite3 "$TO_INDEX_FILE" "delete from files where path = $(_to_sql_quote "$target_path");" >/dev/null 2>/dev/null
+    fi
   fi
 }
 
@@ -1670,6 +1833,12 @@ _to_index_query_files_sqlite() {
   [[ -r "$TO_INDEX_FILE" ]] || return 1
   _to_index_ensure_sqlite_schema || return 1
 
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    matches=("${(@f)$("$TO_HELPER" query-file --db "$TO_INDEX_FILE" -- "$query" 2>/dev/null)}")
+    _to_index_filter_existing_files_to_parents "${matches[@]}"
+    return
+  fi
+
   if _to_query_has_extension "$query"; then
     sql="select path from files where lower_name = $(_to_sql_quote "$query") order by depth asc, length(parent), parent, path limit 100;"
   else
@@ -1682,11 +1851,16 @@ _to_index_query_files_sqlite() {
 
 _to_index_upsert_file_sqlite() {
   local file="${1:A}"
-  local now="$(_to_now)"
+  local now
   local name stem parent depth
 
   [[ -f "$file" ]] || return 0
   _to_index_ensure_sqlite_schema || return 0
+  now="$(_to_now)" || return 0
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    "$TO_HELPER" upsert-file --db "$TO_INDEX_FILE" --path "$file" --now "$now" >/dev/null 2>/dev/null
+    return 0
+  fi
   name="${file:t}"
   stem="$(_to_file_stem "$name")"
   parent="${file:h}"
@@ -1711,7 +1885,6 @@ _to_index_upsert_file() {
   local file="${1:A}"
 
   [[ -f "$file" ]] || return 0
-  command -v sqlite3 >/dev/null 2>&1 || return 0
   _to_index_upsert_file_sqlite "$file"
 }
 
@@ -1751,13 +1924,14 @@ _to_index_query() {
 
 _to_index_upsert_dir_sqlite() {
   local dir="${1:A}"
-  local now="$(_to_now)"
+  local now
   local name parent depth is_git repo repo_name
   local -a tokens token_values
   local token values_sql
 
   [[ -d "$dir" ]] || return 0
   _to_index_ensure_sqlite_schema || return 0
+  now="$(_to_now)" || return 0
   name="${dir:t}"
   parent="${dir:h}"
   depth="$(_to_dir_depth "$dir")"
@@ -1830,8 +2004,16 @@ _to_index_upsert_dir_tsv() {
 
 _to_index_upsert_dir() {
   local dir="${1:A}"
+  local now
 
   [[ -d "$dir" ]] || return 0
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    _to_index_ensure_sqlite_schema >/dev/null 2>&1 || return 0
+    now="$(_to_now)" || return 0
+    "$TO_HELPER" upsert-dir --db "$TO_INDEX_FILE" --path "$dir" --now "$now" >/dev/null 2>/dev/null
+    return 0
+  fi
+  now="$(_to_now)" || return 0
   if command -v sqlite3 >/dev/null 2>&1; then
     _to_index_upsert_dir_sqlite "$dir"
   else
@@ -2489,6 +2671,19 @@ _to_collect_matches_for_mode() {
   shift 2
   queries=("$@")
 
+  if [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]]; then
+    local helper_mode="$mode"
+    [[ "$helper_mode" == broad ]] && helper_mode=broad
+    unique=("${(@f)$(_to_helper_scan_roots_ref "$roots_ref" dir "$helper_mode" 1 "${queries[@]}")}")
+    unique=("${(@)unique:#}")
+    if (( ${#unique} > 0 )); then
+      unique=("${(@f)$(_to_prune_descendant_matches "${unique[@]}")}")
+      ranked=("${(@f)$(printf '%s\n' "${unique[@]}" | _to_rank_matches "${queries[@]}")}")
+      printf '%s\n' "${ranked[@]}"
+      return
+    fi
+  fi
+
   for root in "${search_roots[@]}"; do
     [[ -d "$root" ]] || continue
     if [[ "$mode" == exact && ${#queries} == 1 && "$queries[1]" != */* ]]; then
@@ -2663,6 +2858,11 @@ _to_choose_match() {
     return
   fi
 
+  if [[ "$force_interactive" != 1 ]]; then
+    print -r -- "$matches[1]"
+    return
+  fi
+
   _to_choose_numbered "${matches[@]}"
 }
 
@@ -2775,13 +2975,8 @@ _to_print_roots() {
 }
 
 _to_watch_backend() {
-  if command -v fswatch >/dev/null 2>&1; then
-    print -r -- fswatch
-  elif command -v inotifywait >/dev/null 2>&1; then
-    print -r -- inotifywait
-  else
-    return 1
-  fi
+  [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]] || return 1
+  print -r -- notify
 }
 
 _to_watch_reindex_after_event() {
@@ -2789,27 +2984,22 @@ _to_watch_reindex_after_event() {
   _to_reindex
 }
 
-_to_watch_with_fswatch() {
+_to_watch_with_notify() {
   local -a roots
+  local -a args
+  local root
 
   roots=("$@")
-  print -u2 -- "to: watching roots with fswatch; press Ctrl-C to stop"
-  while fswatch -1 -r "${roots[@]}" >/dev/null 2>&1; do
-    _to_watch_reindex_after_event || return 1
+  print -u2 -- "to: watching roots with reach-helper notify; press Ctrl-C to stop"
+  args=(watch-once)
+  for root in "${roots[@]}"; do
+    args+=(--root "$root")
   done
-}
-
-_to_watch_with_inotifywait() {
-  local -a roots
-  local event
-
-  roots=("$@")
-  print -u2 -- "to: watching roots with inotifywait; press Ctrl-C to stop"
-  inotifywait -m -r -e create -e delete -e move -e attrib --format '%w%f' "${roots[@]}" 2>/dev/null |
-    while IFS= read -r event; do
-      [[ -n "$event" ]] || continue
-      _to_watch_reindex_after_event || return 1
-    done
+  [[ -n "${TO_WATCH_TIMEOUT_MS:-}" ]] && args+=(--timeout-ms "$TO_WATCH_TIMEOUT_MS")
+  while "$TO_HELPER" "${args[@]}" >/dev/null 2>&1; do
+    _to_watch_reindex_after_event || return 1
+    [[ "${TO_WATCH_ONCE:-0}" == 1 ]] && return 0
+  done
 }
 
 _to_watch() {
@@ -2824,16 +3014,13 @@ _to_watch() {
   }
 
   backend="$(_to_watch_backend)" || {
-    print -u2 -- "to: watcher requires fswatch or inotifywait"
+    print -u2 -- "to: watcher requires reach-helper"
     return 1
   }
 
   case "$backend" in
-    fswatch)
-      _to_watch_with_fswatch "${roots[@]}"
-      ;;
-    inotifywait)
-      _to_watch_with_inotifywait "${roots[@]}"
+    notify)
+      _to_watch_with_notify "${roots[@]}"
       ;;
   esac
 }
@@ -2902,7 +3089,7 @@ _to_time_ago() {
     print -r -- "never"
     return
   }
-  now="$(_to_now)"
+  now="$(_to_now)" || return 1
   delta=$(( now - then ))
   (( delta < 60 )) && {
     print -r -- "${delta}s ago"
@@ -2963,7 +3150,7 @@ _to_doctor() {
   [[ "${1:-}" == "--verbose" || "${1:-}" == "-v" ]] && verbose=1
   _to_load_roots
   roots_count="${#TO_ROOTS}"
-  command -v sqlite3 >/dev/null 2>&1 && sqlite_status="enabled" || sqlite_status="disabled, using TSV fallback"
+  [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]] && sqlite_status="helper/bundled" || sqlite_status="legacy fallback"
   _to_watch_backend >/dev/null 2>&1 && watcher_status="available ($(_to_watch_backend))" || watcher_status="unavailable"
   last_reindex="$(_to_stat_get last_reindex 0)"
 
@@ -2972,7 +3159,6 @@ _to_doctor() {
   print -r -- "to index:  $TO_INDEX_FILE"
   print -r -- ""
   print -r -- "Search"
-  print -r -- "  fd: $(_to_command_enabled fd)"
   print -r -- "  sqlite: $sqlite_status"
   print -r -- "  frecency: $(_to_on_off "$TO_FRECENCY")"
   print -r -- "  frecency threshold: $TO_FRECENCY_THRESHOLD"
@@ -3003,7 +3189,6 @@ _to_doctor() {
   (( verbose == 1 )) || return 0
   print -r -- ""
   print -r -- "Verbose"
-  command -v fd >/dev/null 2>&1 && print -r -- "  fd path: $(command -v fd)" || print -r -- "  fd path: no"
   command -v fzf >/dev/null 2>&1 && print -r -- "  fzf path: $(command -v fzf)" || print -r -- "  fzf path: no"
   command -v sqlite3 >/dev/null 2>&1 && print -r -- "  sqlite3 path: $(command -v sqlite3)" || print -r -- "  sqlite3 path: no"
   [[ -n "$TO_HELPER" && -x "$TO_HELPER" ]] && print -r -- "  helper: $TO_HELPER" || print -r -- "  helper: no"
@@ -3091,7 +3276,7 @@ _to_repo_query_sqlite() {
   compact="${(j:-:)compact_parts}"
   phrase="${(j: :)queries}"
   where="${(j: and :)clauses}"
-  now="$(_to_now)"
+  now="$(_to_now)" || return 1
   score_sql="$(_to_repo_score_sql "$now")"
 
   sql="select d.path from dirs d left join history h on h.path = d.path where d.repo = 1 and $where order by ($score_sql) desc, case when d.repo_name = $(_to_sql_quote "$compact") then 0 when replace(d.repo_name, '-', ' ') = $(_to_sql_quote "$phrase") then 1 when d.repo_name like $(_to_sql_quote "$first%") then 2 else 3 end, d.depth asc, length(d.path), d.path limit 50;"
@@ -3485,11 +3670,11 @@ Config:
   TO_OPEN_COMMAND             External URL opener for to gh
   TO_VSCODE_COMMAND           External command for to vscode
   TO_FIG_COMMAND              External command for to fig
-  TO_HELPER                   Optional to-helper binary path
+  TO_HELPER                   Optional reach-helper binary path
 EOF
 }
 
-to() {
+_reach_dispatch() {
   local target alias_target workspace_target resolve_status
 
   case "$1" in
@@ -3610,7 +3795,7 @@ to() {
       _to_watch
       ;;
     --version|-V)
-      print -r -- "to $_TO_VERSION"
+      print -r -- "reach $_TO_VERSION"
       ;;
     -h|--help|"")
       _to_help
@@ -3643,7 +3828,16 @@ to() {
   esac
 }
 
+gt() {
+  _reach_dispatch "$@"
+}
+
+to() {
+  _reach_dispatch "$@"
+}
+
 if (( $+functions[compdef] )); then
+  compdef _to gt 2>/dev/null
   compdef _to to 2>/dev/null
 fi
 

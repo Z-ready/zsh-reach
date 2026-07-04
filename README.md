@@ -1,21 +1,23 @@
-# to
+# reach
 
-`to` is an **exploratory directory jumper for zsh**.
+`reach` is a **fast directory and object jumper for zsh**. Its default jump
+command is `gt`, chosen to avoid common collisions while staying short enough
+to type all day.
 
 It helps you jump to local folders by name, path fragment, keyword, workspace,
 alias, recent destination, frecency history, file name, or Git repository.
 
 ```zsh
-to backend
-to src/components
-to app backend
-to repo nginx
-to cargo tokio
-to code auth
-to gh z-ready/zsh-to
+gt backend
+gt src/components
+gt app backend
+gt repo nginx
+gt cargo tokio
+gt code auth
+gt gh Z-ready/reach
 ```
 
-`to` combines zoxide-style history with developer-focused discovery.
+`reach` combines zoxide-style history with developer-focused discovery.
 Frequently and recently used directories jump first, while the configured-root
 index and live fallback still find folders, files, Git repositories, and
 developer project objects you have never visited before.
@@ -26,18 +28,16 @@ developer project objects you have never visited before.
 
 ## Getting Started
 
-Install `to`:
+Install `reach`:
 
 ```zsh
-brew tap Z-ready/zsh-to https://github.com/Z-ready/zsh-to
-brew trust --formula z-ready/zsh-to/to
-brew install to
+curl -fsSL https://github.com/Z-ready/reach/releases/latest/download/install.sh | sh
 ```
 
 Add this to the end of `~/.zshrc`:
 
 ```zsh
-eval "$(to init zsh)"
+eval "$(reach init zsh)"
 ```
 
 Reload zsh:
@@ -46,77 +46,87 @@ Reload zsh:
 source ~/.zshrc
 ```
 
-By default, `to` searches your home directory. Add focused roots only when you
+By default, `gt` searches your home directory. Add focused roots only when you
 keep work outside your home directory or want a narrower setup:
 
 ```zsh
-to use /path/to/a/root
+gt use /path/to/a/root
 ```
 
 Warm the index when you want faster first searches:
 
 ```zsh
-to --reindex
+gt --reindex
 ```
 
 Jump:
 
 ```zsh
-to backend
+gt backend
 ```
 
-If you create a new directory after indexing, `to` can still find it on the
-first query through live `fd`/`find` fallback and cache it for later:
+If you create a new directory after indexing, `gt` can still find it on the
+first query through the built-in Rust traversal engine and cache it for later:
 
 ```zsh
 mkdir -p ~/somewhere/new-service
-to new-service
+gt new-service
 ```
 
-You can also jump by file name. `to` searches for the file on demand and jumps
+You can also jump by file name. `gt` searches for the file on demand and jumps
 to the directory that contains it:
 
 ```zsh
-to package.json
-to "project spec.md"
-to 音乐.mp3
+gt package.json
+gt "project spec.md"
+gt 音乐.mp3
 ```
 
 Check the installed version:
 
 ```zsh
-to --version
+gt --version
+```
+
+Prefer the old command name? Add this after initialization:
+
+```zsh
+alias to=gt
 ```
 
 ## Installation
 
-`to` can be installed with Homebrew.
+`reach` is distributed as a small zsh wrapper plus a precompiled
+`reach-helper` binary. Users do not need Rust for normal installation.
 
-### 1. Install `to`
+### 1. Install `reach`
 
 ```zsh
-brew tap Z-ready/zsh-to https://github.com/Z-ready/zsh-to
-brew trust --formula z-ready/zsh-to/to
-brew install to
+curl -fsSL https://github.com/Z-ready/reach/releases/latest/download/install.sh | sh
 ```
 
-Homebrew installs the full runtime environment:
+Release assets are published for:
 
-| Dependency | Why it is installed |
+| Platform | Asset |
 | --- | --- |
-| `fd` | Fast filesystem discovery |
-| `fzf` | Interactive result selection |
-| `sqlite` | Index, aliases, workspaces, recent entries, ranking data |
-| `fswatch` | Optional filesystem watching on macOS |
-| `inotify-tools` | Optional filesystem watching on Linux |
-| `rust` | Build-time only, used to compile `to-helper` |
+| macOS arm64 | `reach-macos-aarch64.tar.gz` |
+| macOS x86_64 | `reach-macos-x86_64.tar.gz` |
+| Linux x86_64 | `reach-linux-x86_64.tar.gz` |
+| Linux aarch64 | `reach-linux-aarch64.tar.gz` |
+| Windows | planned |
+
+Optional companion tools:
+
+| Tool | Behavior when present | Fallback when missing |
+| --- | --- | --- |
+| `fzf` | Interactive selection for multiple matches | automatically picks the best frecency-ranked match |
 
 ### 2. Set up zsh
 
 Add this to `~/.zshrc`:
 
 ```zsh
-eval "$(to init zsh)"
+eval "$(reach init zsh)"
 ```
 
 This loads the zsh function that performs the final `cd`.
@@ -124,12 +134,12 @@ This loads the zsh function that performs the final `cd`.
 If you prefer direct sourcing:
 
 ```zsh
-source "$(brew --prefix to)/share/to/to.plugin.zsh"
+source "$HOME/.local/share/reach/to.plugin.zsh"
 ```
 
 ### 3. Optional: rebuild zsh completions
 
-Homebrew installs zsh completions. If completions do not appear:
+If completions do not appear:
 
 ```zsh
 rm -f ~/.zcompdump*
@@ -139,48 +149,47 @@ compinit
 
 ### 4. Source install
 
-Homebrew is the recommended install path. For a manual source install:
+Release binaries are recommended. For a manual source install:
 
 Install build and runtime dependencies first:
 
 ```zsh
 # macOS
-brew install rust fd fzf sqlite zsh fswatch
+brew install rust zsh
 ```
 
 ```sh
 # Ubuntu/Debian
 sudo apt-get update
-sudo apt-get install -y git zsh cargo fd-find fzf sqlite3 inotify-tools
-sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+sudo apt-get install -y git zsh cargo
 ```
 
-`git`, `zsh`, and Rust/Cargo are required to build and load `to`. `fd`, `fzf`,
-`sqlite3`, and a watcher (`fswatch` on macOS, `inotifywait` from
-`inotify-tools` on Linux) provide the full runtime experience.
+`git`, `zsh`, and Rust/Cargo are required only for source builds. `fzf` is
+optional for interactive selection. Directory traversal, SQLite access, and
+filesystem watching are built into `reach-helper`.
 
 ```zsh
-git clone https://github.com/Z-ready/zsh-to.git
-cd zsh-to
+git clone https://github.com/Z-ready/reach.git
+cd reach
 cargo build --release
 
-install -d ~/.local/bin ~/.local/share/to ~/.local/share/zsh/site-functions
-install -m 755 bin/to ~/.local/bin/to
-install -m 755 target/release/to-helper ~/.local/bin/to-helper
-install -m 644 to.plugin.zsh ~/.local/share/to/to.plugin.zsh
-install -m 644 completions/_to ~/.local/share/zsh/site-functions/_to
+install -d ~/.local/bin ~/.local/share/reach ~/.local/share/zsh/site-functions
+install -m 755 bin/reach ~/.local/bin/reach
+install -m 755 target/release/reach-helper ~/.local/bin/reach-helper
+install -m 644 to.plugin.zsh ~/.local/share/reach/to.plugin.zsh
+install -m 644 completions/_gt ~/.local/share/zsh/site-functions/_gt
 ```
 
 Then make sure `~/.local/bin` is on `PATH` and add the normal zsh setup:
 
 ```zsh
-eval "$(to init zsh)"
+eval "$(reach init zsh)"
 ```
 
 Manual installs can also source the plugin directly:
 
 ```zsh
-source ~/.local/share/to/to.plugin.zsh
+source ~/.local/share/reach/to.plugin.zsh
 ```
 
 If you want completions from a manual install, make sure the completion
@@ -192,9 +201,44 @@ autoload -Uz compinit
 compinit
 ```
 
+## Performance
+
+`reach-helper` owns the hot SQLite path using the bundled SQLite library through
+Rust. Database initialization enables:
+
+```sql
+PRAGMA journal_mode = WAL;
+PRAGMA busy_timeout = 5000;
+PRAGMA synchronous = NORMAL;
+```
+
+This keeps routine scoring and frecency updates out of `sqlite3` subprocesses
+and makes concurrent reads/writes much less fragile. Live discovery uses the
+same helper: layer 1 checks frecency and the SQLite index, layer 2 performs a
+bounded ignored-aware traversal under configured roots, and layer 3 falls back
+to a deeper scan when the bounded search misses. That is why `reach` stays fast
+for common jumps while still finding directories and files you have never
+visited.
+
+Run the benchmark harness before publishing a release:
+
+```zsh
+scripts/benchmark.zsh
+```
+
+Current benchmark fields to publish from the release machine:
+
+| Metric | Result |
+| --- | --- |
+| Cold reindex, ~100k directories | run `scripts/benchmark.zsh` |
+| Cached query latency, 50-query proxy | run `scripts/benchmark.zsh` |
+| Concurrent write success, 20 jumps | run `scripts/benchmark.zsh` |
+
+TODO: add bash and fish wrappers after the zsh path stabilizes.
+
 ### 5. Configure roots
 
-`to` searches configured roots. On first load, the default root is your home
+`gt` searches configured roots. On first load, the default root is your home
 directory:
 
 ```text
@@ -446,7 +490,7 @@ to pr 456
 Open GitHub in your browser:
 
 ```zsh
-to gh z-ready/zsh-to
+gt gh Z-ready/reach
 to gh              # from inside a GitHub-backed repository
 ```
 
@@ -516,32 +560,32 @@ to dir backend            # jump to a matching directory
 to ws work                # jump to a matching workspace
 to cargo tokio            # jump by Cargo.toml metadata
 to npm react              # jump by package.json metadata
-to py fastapi             # jump by Python project metadata
-to docker nginx           # jump by Docker metadata
-to code auth              # jump by code text under configured roots
-to issue 123              # jump to a local issue clone
-to pr 456                 # jump to a local pull-request clone
-to gh z-ready/zsh-to      # open a GitHub repository
-to vscode backend         # open a matching directory in VS Code
-to fig backend            # run fig for a matching directory
-to recent                 # jump from recent destinations
-to ai docker              # use TO_AI_COMMAND, or broad fallback search
+gt py fastapi             # jump by Python project metadata
+gt docker nginx           # jump by Docker metadata
+gt code auth              # jump by code text under configured roots
+gt issue 123              # jump to a local issue clone
+gt pr 456                 # jump to a local pull-request clone
+gt gh Z-ready/reach       # open a GitHub repository
+gt vscode backend         # open a matching directory in VS Code
+gt fig backend            # run fig for a matching directory
+gt recent                 # jump from recent destinations
+gt ai docker              # use TO_AI_COMMAND, or broad fallback search
 
-to init zsh               # print zsh integration script
-to --reindex              # refresh the SQLite/TSV directory index
-to --watch                # watch roots and reindex after filesystem changes
-to --doctor               # grouped diagnostics and runtime statistics
-to --doctor --verbose     # include low-level tool paths and AI hooks
-to --version              # show version
+reach init zsh            # print zsh integration script
+gt --reindex              # refresh the SQLite directory index
+gt --watch                # watch roots and reindex after filesystem changes
+gt --doctor               # grouped diagnostics and runtime statistics
+gt --doctor --verbose     # include low-level tool paths and AI hooks
+gt --version              # show version
 ```
 
-`to init zsh`, `to --doctor`, `to --reindex`, `to --watch`, `to --version`,
-and state-management commands such as `to roots` can run from the installed
-`bin/to` wrapper. Directory jumps require shell integration because only a zsh
+`reach init zsh`, `reach --doctor`, `reach --reindex`, `reach --watch`,
+`reach --version`, and state-management commands such as `reach roots` can run
+from the installed `bin/reach` wrapper. Directory jumps require shell integration because only a zsh
 function can change the current shell's working directory.
 
-When multiple matches are found, `to` opens `fzf`. If `fzf` is unavailable, it
-prints a numbered list.
+When multiple matches are found, `gt` opens `fzf` if it is installed. If `fzf`
+is unavailable, `gt` automatically chooses the best ranked match.
 
 ## Matching
 
@@ -555,8 +599,9 @@ Resolution order:
 6. SQLite Git repo matches.
 7. SQLite token matches for multi-word queries.
 8. SQLite path-fragment matches.
-9. Live directory discovery with `fd`, with `find` fallback.
-10. File-name discovery, jumping to the containing directory.
+9. Live directory discovery through `reach-helper`.
+10. Deep fallback discovery when the bounded live scan misses.
+11. File-name discovery, jumping to the containing directory.
 
 Explicit object commands narrow the same engine by intent. `to file` uses the
 file cache and on-demand file-name scan, `to dir` uses directory matching,
@@ -600,7 +645,7 @@ to "cover photo.jpg"
 ```
 
 Queries with an extension search for that exact file name. Plain names prefer
-directories first; if no directory matches, `to` searches for either that exact
+directories first; if no directory matches, `gt` searches for either that exact
 file name or files with the same stem:
 
 ```zsh
@@ -631,7 +676,7 @@ repositories sorted by frecency.
 Configuration is loaded from:
 
 ```zsh
-~/.config/to/config.zsh
+~/.config/reach/config.zsh
 ```
 
 Example:
@@ -687,9 +732,9 @@ Options:
 | `TO_OPEN_COMMAND` | auto | URL opener for `to gh` |
 | `TO_VSCODE_COMMAND` | auto | Directory opener for `to vscode` |
 | `TO_FIG_COMMAND` | auto | Directory command for `to fig` |
-| `TO_HELPER` | auto | Explicit path to `to-helper` |
+| `TO_HELPER` | auto | Explicit path to `reach-helper` |
 
-Persistent state lives under `~/.config/to` by default:
+Persistent state lives under `~/.config/reach` by default:
 
 ```text
 roots         configured search roots
@@ -697,7 +742,6 @@ index.sqlite3 SQLite dirs, tokens, aliases, workspaces, recent, root metadata
 aliases       text fallback for aliases
 workspaces    text fallback for workspaces
 recent        text fallback for recent jumps
-index.tsv     fallback directory index when sqlite3 is unavailable
 ```
 
 Set `TO_CONFIG_HOME` before loading the plugin to use another config
@@ -715,7 +759,7 @@ breaking shell startup.
 
 `to` changes only shell state and files under `TO_CONFIG_HOME`. It does not
 delete user directories. When cached paths become stale, `to` prunes those rows
-from its own SQLite/TSV index and falls back to live filesystem search.
+from its own SQLite index and falls back to live filesystem search.
 
 Path handling is quoted and tested with spaces and unicode. SQL queries quote
 user input before passing it to SQLite.
@@ -736,13 +780,18 @@ Normal jumps are history-first, then index-first:
 ```text
 query -> frecency history -> validate path -> cd
       -> SQLite index -> validate path -> cd
-      -> live fd/find search under configured roots
+      -> bounded helper scan under configured roots
+      -> deep helper scan if the bounded scan misses
       -> cache result in SQLite and history
 ```
 
-Fallback search runs only inside the configured roots, never across the whole
-filesystem by default. In home-first mode, a new directory anywhere under
-`$HOME` is discoverable immediately:
+`TO_MAX_DEPTH` controls layer-2 traversal only: lower values make the common
+fallback faster but may miss deeply nested paths. Layer 3 is deliberately not
+limited by `TO_MAX_DEPTH`; it keeps symlink-loop protection and a hard internal
+depth safety cap, and prints a short notice before doing the slower scan.
+
+Fallback search starts inside the configured roots. In home-first mode, a new
+directory anywhere under `$HOME` is discoverable immediately:
 
 ```zsh
 mkdir -p "$HOME/somewhere/new-service"
@@ -756,6 +805,25 @@ File-name jumps use the same roots and exclusions. `to` does not eagerly index
 every file during startup or reindex; it looks up cached file hits first, then
 scans file names on demand and records successful hits in SQLite. This keeps
 the database small and avoids turning `to` into a full content indexer.
+
+### Ignore Rules
+
+`reach-helper` has built-in ignores for large generated directories such as
+`.git/`, `node_modules/`, `target/`, virtualenvs, `__pycache__/`, `dist/`, and
+`build/`. Add your own patterns to:
+
+```zsh
+$HOME/.reachignore
+```
+
+The format is the same as `.gitignore`. Project `.gitignore` files are also
+read by default and stack with `.reachignore`; set `TO_USE_GITIGNORE=0` to use
+only the built-in and reach-specific rules. Set `TO_REACHIGNORE=/path/to/file`
+to use a different ignore file.
+
+SQLite remains the default store. The Rust store layer is abstracted so a
+future release can evaluate a KV backend, but any such change will re-check the
+maintenance status of candidates at that time.
 
 The SQLite index stores:
 
@@ -803,21 +871,11 @@ Run a watcher when you want the index kept warm automatically:
 to --watch
 ```
 
-On macOS, install `fswatch`:
-
-```zsh
-brew install fswatch
-```
-
-On Linux, install `inotify-tools`:
-
-```sh
-sudo apt-get install -y inotify-tools
-```
-
 The watcher monitors configured roots, waits `TO_WATCH_DEBOUNCE` seconds after
 an event, then runs incremental `to --reindex`. That adds new directories under
-changed roots and prunes stale indexed directories.
+changed roots and prunes stale indexed directories. It is implemented inside
+`reach-helper` with the Rust `notify` crate, which uses the native platform
+watcher where available.
 
 To start the watcher automatically when `eval "$(to init zsh)"` loads the zsh
 integration, set:
@@ -826,7 +884,7 @@ integration, set:
 TO_AUTOWATCH=1
 ```
 
-`TO_AUTOWATCH` starts only when `fswatch` or `inotifywait` is available.
+`TO_AUTOWATCH` starts only when `reach-helper` is available.
 
 For lower energy use on large machines, prefer:
 

@@ -1,9 +1,13 @@
 [package]
-name = "to-helper"
-version = "1.5.0"
+name = "reach-helper"
+version = "1.6.0"
 edition = "2021"
 license = "MIT"
-description = "Optional helper for the zsh-to directory jumper"
+description = "SQLite helper for the reach directory jumper"
+
+[[bin]]
+name = "reach-helper"
+path = "src/main.rs"
 
 [profile.release]
 strip = true
@@ -11,3 +15,8 @@ lto = true
 codegen-units = 1
 
 [dependencies]
+ignore = "0.4"
+notify = "6"
+rayon = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+walkdir = "2"
