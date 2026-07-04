@@ -1,18 +1,17 @@
 # Architecture
 
-`to` has two runtime pieces:
+`reach` has three runtime pieces:
 
-- `bin/to`: a zsh wrapper used before shell integration. It prints the init
+- `bin/reach`: a zsh wrapper used before shell integration. It prints the init
   script and can run non-jump commands such as `--doctor`, `--reindex`,
   `roots`, and `--version`.
-- `to.plugin.zsh`: the shell integration. It defines the `to` function that can
-  change the current shell's working directory.
+- `to.plugin.zsh`: the shell integration. The file name is retained for
+  compatibility, but it defines the default `gt` command and the legacy `to`
+  function.
+- `reach-helper`: the Rust backend for SQLite, traversal, indexing, and native
+  filesystem watching.
 
-The Rust binary, `to-helper`, is an optional accelerator for SQLite queries. The
-zsh implementation remains the source of truth so the tool can fall back to
-plain `sqlite3`, TSV files, `fd`, or `find`.
-
-## Data flow
+## Lookup Flow
 
 ```text
 query
@@ -21,74 +20,58 @@ query
   -> workspaces
   -> frecency history
   -> SQLite directory/file/repository index
-  -> explicit object adapters (file/dir/ws/package/code)
-  -> external shortcut adapters (issue/pr/gh/vscode/fig)
-  -> TSV fallback
-  -> live fd/find search
-  -> interactive selection when needed
+  -> explicit object adapters
+  -> bounded helper traversal
+  -> deep helper traversal
+  -> optional fzf selection
   -> cd
-  -> recent/frecency/index/stat bookkeeping
+  -> history/index/stat bookkeeping
 ```
 
-## Persistent state
+The normal path uses `reach-helper` and `rusqlite` with bound parameters.
+Legacy zsh fallback paths still exist for older installs without the helper;
+those paths use the `sqlite3` CLI and conservative quoting, and are not the
+default supported hot path.
 
-By default, all state lives under `~/.config/to`:
+## Persistent State
+
+By default, all state lives under `~/.config/reach`:
 
 - `roots`: configured search roots.
-- `index.sqlite3`: primary index when SQLite is available.
-- `index.tsv`: fallback index when SQLite is unavailable.
+- `index.sqlite3`: primary SQLite index.
 - `aliases`: text fallback for user aliases.
 - `workspaces`: text fallback for workspaces.
 - `recent`: text fallback for recent destinations.
 
-The SQLite database also owns frecency and runtime-diagnostic state:
+The SQLite database owns:
 
-- `history(path, visits, last_used)`: successful jumps update one row.
-- `files(path, name, stem, parent, depth, last_seen)`: file-name cache populated
-  on demand.
-- `stats(key, value)`: last search outcome, hit counters, and last reindex.
-- `dirs.repo` and `dirs.repo_name`: Git repository metadata populated during
-  reindex and live repo fallback.
+- `dirs(path, name, parent, depth, repo, repo_name, last_seen, last_used, hit_count)`.
+- `tokens(token, dir_id)`.
+- `files(path, name, stem, parent, depth, last_seen)`.
+- `history(path, visits, last_used)`.
+- `stats(key, value)`.
+- `roots(path, mtime, config_key, last_indexed)`.
+- `aliases(name, path)`.
+- `workspaces(name, path)`.
+- `recent(path, last_used)`.
 
-Queries use history before the directory index when `TO_FRECENCY=1`, then fall
-back to index and live discovery if no history score reaches
-`TO_FRECENCY_THRESHOLD`.
+## Module Boundaries
 
-`TO_CONFIG_HOME` can move this state directory.
+Rust modules:
 
-## Current module boundaries
+- `src/main.rs`: CLI parsing and command dispatch.
+- `src/store.rs`: SQLite schema, WAL/busy timeout setup, and store queries.
+- `src/traverse.rs`: ignored-aware traversal, cancellation, and symlink guards.
+- `src/ignore_rules.rs`: built-in ignores plus `.reachignore` and `.gitignore`.
+- `src/watcher.rs`: native watcher wrapper through `notify`.
 
-`to.plugin.zsh` is intentionally still a single shipped file. That keeps
-Homebrew installation and `eval "$(to init zsh)"` simple, but the file has clear
-internal areas:
+The zsh plugin intentionally remains a single shipped file so
+`eval "$(reach init zsh)"` and Homebrew installs stay simple. The public names
+are:
 
-1. Config defaults and path expansion.
-2. Root, alias, workspace, recent, frecency, and runtime-stat state.
-3. SQLite schema and migration.
-4. Index collection, refresh, pruning, and query.
-5. Matching and ranking.
-6. Object navigation adapters.
-7. External shortcut adapters.
-8. Interactive selection.
-9. Watcher and doctor commands.
-10. Public `to` command dispatch.
+- `gt`: default user command.
+- `to`: legacy compatibility command retained through the `1.x` line.
+- `reach`: wrapper command for init and non-jump operations.
 
-## Refactor plan
-
-If the plugin is split later, keep the installed public surface unchanged:
-
-- `bin/to` must still print one sourceable entrypoint.
-- Homebrew should still install the plugin under `share/to`.
-- Direct source installs should still work from a single documented directory.
-- Tests must continue to drive the public `to` function rather than private
-  helper files.
-
-The safest split order is:
-
-1. Move SQLite/index helpers into a sourced `index.zsh`.
-2. Move state helpers into a sourced `state.zsh`.
-3. Move matching/selection helpers into a sourced `match.zsh`.
-4. Keep command dispatch in `to.plugin.zsh`.
-
-Each split should preserve function names until the test suite has equivalent
-coverage for the new boundary.
+If the plugin is split later, keep `to.plugin.zsh` as a compatibility entrypoint
+and continue testing through the public `gt`/`to` functions.

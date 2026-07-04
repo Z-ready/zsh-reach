@@ -70,6 +70,7 @@ mkdir -p \
   "$SEARCH_ROOT/reindex-stale" \
   "$SEARCH_ROOT/moved-before" \
   "$SEARCH_ROOT/Space Dir/child target" \
+  "$SEARCH_ROOT/special/quote' OR 1=1 -- \\ path" \
   "$SEARCH_ROOT/unicode/naïve-café" \
   "$SEARCH_ROOT/workspace-school" \
   "$SEARCH_ROOT/repos/nginx/.git" \
@@ -142,10 +143,12 @@ assert_eq "$TO_AUTOWATCH" "0" "invalid config autowatch falls back to default"
 assert_eq "$TO_AUTO_ADD_ROOTS" "0" "invalid config auto add roots falls back to default"
 assert_eq "$TO_FRECENCY" "1" "invalid config frecency falls back to default"
 assert_eq "$TO_FRECENCY_THRESHOLD" "1" "invalid config frecency threshold falls back to default"
+assert_eq "$TO_HOOK_TIMEOUT" "5" "invalid config hook timeout falls back to default"
 assert_eq "$(gt --version)" "reach 1.6.0" "default gt version output"
 assert_eq "$(to --version)" "reach 1.6.0" "legacy to version output"
 assert_eq "$(to roots)" "${HOME_DIR:A}" "source ignores stale in-shell roots"
 assert_eq "$TO_WATCH_DEBOUNCE" "2" "watch debounce default"
+assert_eq "$TO_HOOK_TIMEOUT" "5" "hook timeout default"
 assert_eq "$TO_AI_RANK_COMMAND" "" "ai rank command default"
 assert_eq "$(_to_unique_existing_dirs "$HOME_DIR/any shelf" "$HOME_DIR")" "${HOME_DIR:A}" "broader roots prune descendants"
 assert_eq "$(_to_unique_existing_dirs "$HOME_DIR" "$HOME_DIR/any shelf")" "${HOME_DIR:A}" "descendant roots are redundant after broader roots"
@@ -469,6 +472,19 @@ cd "$ROOT" || fail "could not reset cwd"
 to -r "$SEARCH_ROOT" "child target"
 assert_path_eq "$PWD" "$SEARCH_ROOT/Space Dir/child target" "space-containing path jump"
 
+special_sql_path="$SEARCH_ROOT/special/quote' OR 1=1 -- \\ path"
+cd "$ROOT" || fail "could not reset cwd"
+to -r "$SEARCH_ROOT" "quote' OR 1=1 -- \\ path"
+assert_path_eq "$PWD" "$special_sql_path" "special-character path jump"
+cd "$ROOT" || fail "could not reset cwd"
+to "quote' OR 1=1 -- \\ path"
+assert_path_eq "$PWD" "$special_sql_path" "special-character sqlite query jump"
+_to_index_upsert_dir "$special_sql_path"
+if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$TO_INDEX_FILE" ]]; then
+  special_sql_count="$(sqlite3 "$TO_INDEX_FILE" "select count(*) from dirs where path = $(_to_sql_quote "${special_sql_path:A}");")"
+  assert_eq "$special_sql_count" "1" "special-character path is stored without SQL injection"
+fi
+
 cd "$ROOT" || fail "could not reset cwd"
 to -r "$SEARCH_ROOT" naïve-café
 assert_path_eq "$PWD" "$SEARCH_ROOT/unicode/naïve-café" "unicode path jump"
@@ -624,6 +640,19 @@ export TO_EXTERNAL_COMMAND_LOG="$OPEN_LOG"
 TO_OPEN_COMMAND="$EXTERNAL_BIN/open-url"
 to gh z-ready/zsh-to
 assert_eq "$(cat "$OPEN_LOG")" "https://github.com/z-ready/zsh-to" "gh shortcut opens owner repo URL"
+cat > "$EXTERNAL_BIN/slow-open" <<'EOF'
+#!/usr/bin/env zsh
+sleep 5
+EOF
+chmod +x "$EXTERNAL_BIN/slow-open"
+old_hook_timeout="$TO_HOOK_TIMEOUT"
+TO_HOOK_TIMEOUT=1
+TO_OPEN_COMMAND="$EXTERNAL_BIN/slow-open"
+open_timeout_output="$(to gh z-ready/zsh-to 2>&1)" && fail "open hook timeout should fail"
+[[ "$open_timeout_output" == *"open hook timed out after 1s (TO_OPEN_COMMAND)"* ]] \
+  || fail "open hook timeout message missing: $open_timeout_output"
+ok "custom open hook timeout is enforced"
+TO_HOOK_TIMEOUT="$old_hook_timeout"
 TO_OPEN_COMMAND=""
 to vscode backend
 assert_path_eq "$(cat "$OPEN_LOG")" "$SEARCH_ROOT/app/services/backend" "vscode shortcut opens matching directory"

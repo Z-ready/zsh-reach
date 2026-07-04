@@ -22,6 +22,7 @@ typeset -g TO_FRECENCY_THRESHOLD
 typeset -g TO_OPEN_COMMAND
 typeset -g TO_VSCODE_COMMAND
 typeset -g TO_FIG_COMMAND
+typeset -g TO_HOOK_TIMEOUT
 typeset -g TO_REACHIGNORE
 typeset -g TO_USE_GITIGNORE
 typeset -g TO_SHOW_DEEP_SCAN_PROMPT
@@ -99,6 +100,7 @@ _to_apply_config_defaults() {
   _to_apply_bool_default TO_SHOW_DEEP_SCAN_PROMPT 1
   _to_apply_nonnegative_number_default TO_FRECENCY_THRESHOLD 1
   _to_apply_nonnegative_int_default TO_WATCH_DEBOUNCE 2
+  _to_apply_positive_int_default TO_HOOK_TIMEOUT 5
   _to_apply_root_mode_default
 }
 
@@ -115,6 +117,7 @@ _to_apply_config_defaults() {
 : ${TO_OPEN_COMMAND:=""}
 : ${TO_VSCODE_COMMAND:=""}
 : ${TO_FIG_COMMAND:=""}
+: ${TO_HOOK_TIMEOUT:=5}
 : ${TO_HELPER:=""}
 : ${TO_REACHIGNORE:="${REACH_IGNORE_FILE:-$HOME/.reachignore}"}
 : ${TO_MAX_DEPTH:=8}
@@ -225,8 +228,60 @@ _to_builtin_alias() {
 
 _to_sql_quote() {
   local value="$1"
-  value="${value//\'/\'\'}"
+  local single_quote="'"
+  local escaped_quote="''"
+
+  value="${value//$single_quote/$escaped_quote}"
   print -r -- "'$value'"
+}
+
+_to_hook_timeout_message() {
+  local label="$1"
+  local config_name="$2"
+
+  print -u2 -- "to: $label timed out after ${TO_HOOK_TIMEOUT}s ($config_name); set TO_HOOK_TIMEOUT to adjust"
+}
+
+_to_run_configured_command() {
+  local label="$1"
+  local config_name="$2"
+  local command_value="$3"
+  local input_file="$4"
+  shift 4
+  local output_file timeout_file exit_status pid watcher bg_nice_was_set
+
+  output_file="${TMPDIR:-/tmp}/to-hook-output.${$}.${RANDOM}"
+  timeout_file="${TMPDIR:-/tmp}/to-hook-timeout.${$}.${RANDOM}"
+  bg_nice_was_set=0
+  [[ -o bg_nice ]] && bg_nice_was_set=1
+  unsetopt bg_nice
+  if [[ -n "$input_file" ]]; then
+    { eval "$command_value ${(@q)@}" < "$input_file"; } > "$output_file" 2>/dev/null &
+  else
+    { eval "$command_value ${(@q)@}"; } > "$output_file" 2>/dev/null &
+  fi
+  pid=$!
+  {
+    command sleep "$TO_HOOK_TIMEOUT" 2>/dev/null
+    if kill -0 "$pid" 2>/dev/null; then
+      : > "$timeout_file"
+      kill "$pid" 2>/dev/null
+    fi
+  } &
+  watcher=$!
+  (( bg_nice_was_set == 1 )) && setopt bg_nice
+  wait "$pid"
+  exit_status=$?
+  kill "$watcher" 2>/dev/null
+  wait "$watcher" 2>/dev/null
+  if [[ -e "$timeout_file" ]]; then
+    _to_hook_timeout_message "$label" "$config_name"
+    rm -f "$output_file" "$timeout_file"
+    return 124
+  fi
+  cat "$output_file"
+  rm -f "$output_file" "$timeout_file"
+  return "$exit_status"
 }
 
 _to_now() {
@@ -2238,7 +2293,7 @@ _to_rank_matches() {
     ai_input="${TMPDIR:-/tmp}/to-ai-rank.${$}"
     printf '%s\n' "${candidates[@]}" > "$ai_input" || ai_input=""
     if [[ -n "$ai_input" ]]; then
-      ai_ranked=("${(@f)$(eval "$TO_AI_RANK_COMMAND ${(q)query_l}" < "$ai_input" 2>/dev/null)}")
+      ai_ranked=("${(@f)$(_to_run_configured_command "AI rank hook" "TO_AI_RANK_COMMAND" "$TO_AI_RANK_COMMAND" "$ai_input" "$query_l")}")
       rm -f "$ai_input"
     fi
     for dir in "${ai_ranked[@]}"; do
@@ -3197,6 +3252,7 @@ _to_doctor() {
   [[ -n "$TO_OPEN_COMMAND" ]] && print -r -- "  open command: $TO_OPEN_COMMAND" || print -r -- "  open command: auto"
   [[ -n "$TO_VSCODE_COMMAND" ]] && print -r -- "  vscode command: $TO_VSCODE_COMMAND" || print -r -- "  vscode command: auto"
   [[ -n "$TO_FIG_COMMAND" ]] && print -r -- "  fig command: $TO_FIG_COMMAND" || print -r -- "  fig command: auto"
+  print -r -- "  hook timeout: ${TO_HOOK_TIMEOUT}s"
 }
 
 _to_add_alias() {
@@ -3439,7 +3495,7 @@ _to_open_url() {
     print -u2 -- "to: no browser opener found; open manually: $url"
     return 1
   }
-  eval "$opener ${(q)url}" >/dev/null 2>&1
+  _to_run_configured_command "open hook" "TO_OPEN_COMMAND" "$opener" "" "$url" >/dev/null
 }
 
 _to_repo_for_gh() {
@@ -3577,7 +3633,7 @@ _to_run_external_dir_command() {
     _to_print_no_match_advice "$label target" "$@"
     return 1
   }
-  eval "$command_value ${(q)dir}" >/dev/null 2>&1
+  _to_run_configured_command "$label hook" "TO_${(U)label}_COMMAND" "$command_value" "" "$dir" >/dev/null
 }
 
 _to_vscode_command() {
@@ -3602,7 +3658,7 @@ _to_ai_matches() {
   local old_search="$TO_SEARCH_PATH_FRAGMENTS"
 
   if [[ -n "$TO_AI_COMMAND" ]]; then
-    eval "$TO_AI_COMMAND ${(q)query}"
+    _to_run_configured_command "AI hook" "TO_AI_COMMAND" "$TO_AI_COMMAND" "" "$query"
     return
   fi
 
@@ -3670,6 +3726,7 @@ Config:
   TO_OPEN_COMMAND             External URL opener for to gh
   TO_VSCODE_COMMAND           External command for to vscode
   TO_FIG_COMMAND              External command for to fig
+  TO_HOOK_TIMEOUT             Seconds before a user hook is terminated
   TO_HELPER                   Optional reach-helper binary path
 EOF
 }
