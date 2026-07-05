@@ -71,12 +71,22 @@ fn search_layer(
     if let Ok(pool) = result {
         pool.install(|| {
             config.roots.par_iter().for_each(|root| {
-                let _ = visit_dir(root, 0, config, max_depth, &state);
+                let rules = match IgnoreRules::new(
+                    root,
+                    config.reachignore.as_deref(),
+                    config.use_gitignore,
+                ) {
+                    Ok(r) => r,
+                    Err(_) => return,
+                };
+                let _ = visit_dir(root, 0, config, max_depth, &state, &rules);
             });
         });
     } else {
         for root in &config.roots {
-            visit_dir(root, 0, config, max_depth, &state)?;
+            let rules =
+                IgnoreRules::new(root, config.reachignore.as_deref(), config.use_gitignore)?;
+            visit_dir(root, 0, config, max_depth, &state, &rules)?;
         }
     }
     let mut out = state
@@ -112,6 +122,7 @@ fn visit_dir(
     config: &TraverseConfig,
     max_depth: Option<usize>,
     state: &VisitState,
+    rules: &IgnoreRules,
 ) -> Result<(), CliError> {
     if state.cancel.load(Ordering::Relaxed)
         || depth > HARD_DEPTH_LIMIT
@@ -129,7 +140,6 @@ fn visit_dir(
             return Ok(());
         }
     }
-    let rules = IgnoreRules::new(dir, config.reachignore.as_deref(), config.use_gitignore)?;
     let mut entries = std::fs::read_dir(dir)?.collect::<Result<Vec<_>, std::io::Error>>()?;
     entries.sort_by_key(|entry| entry.path());
     for entry in entries {
@@ -165,11 +175,27 @@ fn visit_dir(
                 state.cancel.store(true, Ordering::Relaxed);
             }
         }
-        if is_dir || (config.follow_links && file_type.is_symlink()) {
-            visit_dir(&path, depth + 1, config, max_depth, state)?;
+        if should_recurse(&path, file_type, config.follow_links)? {
+            visit_dir(&path, depth + 1, config, max_depth, state, rules)?;
         }
     }
     Ok(())
+}
+
+fn should_recurse(
+    path: &Path,
+    file_type: std::fs::FileType,
+    follow_links: bool,
+) -> Result<bool, CliError> {
+    if file_type.is_dir() {
+        return Ok(true);
+    }
+    if follow_links && file_type.is_symlink() {
+        return Ok(std::fs::metadata(path)
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false));
+    }
+    Ok(false)
 }
 
 pub fn serial_walk_for_index(
@@ -339,6 +365,86 @@ mod tests {
         assert!(!walked.iter().any(|path| path.ends_with("ignored-by-git")));
         assert!(!walked.iter().any(|path| path.ends_with("ignored-by-reach")));
         assert!(walked.iter().any(|path| path.ends_with("kept-by-both")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nested_gitignore_is_honored_during_live_traversal() {
+        let root = temp_root("reach-nested-ignore");
+        std::fs::create_dir_all(root.join("project/ignored-dir/target-dir")).expect("target");
+        std::fs::create_dir_all(root.join("project/kept-dir")).expect("kept");
+        std::fs::write(root.join("project/.gitignore"), "ignored-dir/\n").expect("gitignore");
+
+        let config = TraverseConfig {
+            roots: vec![root.clone()],
+            query_terms: vec!["target-dir".to_owned()],
+            kind: TargetKind::Directory,
+            mode: MatchMode::Exact,
+            max_depth: None,
+            follow_links: false,
+            reachignore: None,
+            use_gitignore: true,
+            deep_fallback: false,
+            deep_prompt: false,
+        };
+
+        let outcome = search(&config).expect("search");
+
+        assert!(
+            !outcome.matches.iter().any(|p| p.ends_with("target-dir")),
+            "ignored-dir should not be visited"
+        );
+
+        let config_kept = TraverseConfig {
+            roots: vec![root.clone()],
+            query_terms: vec!["kept-dir".to_owned()],
+            kind: TargetKind::Directory,
+            mode: MatchMode::Exact,
+            max_depth: None,
+            follow_links: false,
+            reachignore: None,
+            use_gitignore: true,
+            deep_fallback: false,
+            deep_prompt: false,
+        };
+
+        let outcome_kept = search(&config_kept).expect("search kept");
+        assert!(
+            outcome_kept.matches.iter().any(|p| p.ends_with("kept-dir")),
+            "kept-dir should be found"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn following_links_skips_symlinks_to_files() {
+        let root = temp_root("reach-symlink-file");
+        std::fs::create_dir_all(root.join("real-target")).expect("target dir");
+        std::fs::write(root.join("file-target.txt"), "hello").expect("file");
+        std::os::unix::fs::symlink("file-target.txt", root.join("link-to-file"))
+            .expect("symlink to file");
+
+        let config = TraverseConfig {
+            roots: vec![root.clone()],
+            query_terms: vec!["real-target".to_owned()],
+            kind: TargetKind::Directory,
+            mode: MatchMode::Exact,
+            max_depth: None,
+            follow_links: true,
+            reachignore: None,
+            use_gitignore: false,
+            deep_fallback: false,
+            deep_prompt: false,
+        };
+
+        let outcome = search(&config).expect("search should not abort on file symlink");
+        assert!(
+            outcome.matches.iter().any(|p| p.ends_with("real-target")),
+            "real-target should be found"
+        );
+
         let _ = std::fs::remove_dir_all(root);
     }
 
